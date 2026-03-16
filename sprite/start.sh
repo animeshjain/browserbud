@@ -3,8 +3,12 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Start ttyd serving Claude Code
-ttyd -W -p 7681 claude --dangerously-skip-permissions &
+# Browser sessions live outside the plugin repo
+WORK_DIR="$HOME/sessions"
+mkdir -p "$WORK_DIR"
+
+# Start ttyd serving Claude Code in the sessions directory
+ttyd -W -p 7681 bash -c "cd $WORK_DIR && exec claude --dangerously-skip-permissions" &
 TTYD_PID=$!
 echo "Started ttyd (PID $TTYD_PID)"
 
