@@ -7,7 +7,9 @@ const { v4: uuidv4 } = require("uuid");
 
 const TTYD_PORT = 7681;
 const PROXY_PORT = 8080;
-const CONTEXT_FILE = path.join(process.env.HOME, "browserbud", "context.json");
+const DATA_DIR = process.env.BROWSERBUD_DATA_DIR || path.join(process.env.HOME, "browse");
+const CONTEXT_DIR = path.join(DATA_DIR, "context");
+const CONTEXT_FILE = path.join(CONTEXT_DIR, "current.json");
 
 // ─── IDE MCP WebSocket Server ───────────────────────────────────────────────
 
@@ -117,7 +119,7 @@ function writeLockFile() {
   const lockPath = path.join(IDE_DIR, `${mcpPort}.lock`);
   const lockData = {
     pid: process.pid,
-    workspaceFolders: [path.join(process.env.HOME, "sessions")],
+    workspaceFolders: [DATA_DIR],
     ideName: "BrowserBud",
     transport: "ws",
     authToken,
@@ -190,6 +192,8 @@ function handleContext(req, res) {
     req.on("end", () => {
       try {
         const context = JSON.parse(body);
+        context.timestamp = new Date().toISOString();
+        fs.mkdirSync(CONTEXT_DIR, { recursive: true });
         fs.writeFileSync(CONTEXT_FILE, JSON.stringify(context, null, 2));
 
         // Push to Claude Code via MCP
