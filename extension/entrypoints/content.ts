@@ -21,6 +21,13 @@ export default defineContentScript({
       browser.runtime.sendMessage({ type: "context", data: context });
     }
 
+    // Respond to getContext requests from the background worker (tab switch)
+    browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (message.type === "getContext") {
+        sendResponse(getContext());
+      }
+    });
+
     sendContext();
 
     // YouTube uses SPA navigation — watch for URL changes
