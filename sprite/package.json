@@ -1,0 +1,8 @@
+{
+  "name": "browserbud-sprite",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "http-proxy": "^1.18.1"
+  }
+}
