@@ -15,7 +15,6 @@ export default defineContentScript({
       return { site: "youtube", title: "browsing", url };
     }
 
-    // Send context on load and on navigation (YouTube is a SPA)
     function sendContext() {
       const context = getContext();
       browser.runtime.sendMessage({ type: "context", data: context });
@@ -30,15 +29,10 @@ export default defineContentScript({
 
     sendContext();
 
-    // YouTube uses SPA navigation — watch for URL changes
-    let lastUrl = location.href;
-    const observer = new MutationObserver(() => {
-      if (location.href !== lastUrl) {
-        lastUrl = location.href;
-        // Title updates slightly after URL change
-        setTimeout(sendContext, 1000);
-      }
+    // YouTube fires this custom event on SPA navigation
+    document.addEventListener("yt-navigate-finish", () => {
+      // Title needs a moment to update after navigation
+      setTimeout(sendContext, 1500);
     });
-    observer.observe(document.body, { childList: true, subtree: true });
   },
 });
