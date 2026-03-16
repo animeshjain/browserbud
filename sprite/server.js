@@ -42,15 +42,20 @@ function startMcpServer() {
     ws.on("message", (data) => {
       try {
         const msg = JSON.parse(data);
+        console.log("[MCP] Received:", msg.method || `response:${msg.id}`);
         handleMcpMessage(ws, msg);
       } catch (err) {
         console.error("[MCP] Bad message:", err.message);
       }
     });
 
-    ws.on("close", () => {
-      console.log("[MCP] Claude Code disconnected");
+    ws.on("close", (code, reason) => {
+      console.log(`[MCP] Claude Code disconnected (code: ${code}, reason: ${reason})`);
       connectedClients.delete(ws);
+    });
+
+    ws.on("error", (err) => {
+      console.error("[MCP] WebSocket error:", err.message);
     });
 
     // Ping every 30s
@@ -65,6 +70,8 @@ function startMcpServer() {
     mcpPort = mcpServer.address().port;
     writeLockFile();
     console.log(`[MCP] IDE server listening on 127.0.0.1:${mcpPort}`);
+    // Write port to file so start.sh can read it for env vars
+    fs.writeFileSync(path.join(IDE_DIR, "browserbud.port"), String(mcpPort));
   });
 
   return mcpServer;
