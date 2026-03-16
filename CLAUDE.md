@@ -96,6 +96,23 @@ browserbud/
 │   ├── start.sh              # Startup script (server → ttyd)
 │   ├── package.json          # Deps: http-proxy, ws, uuid
 │   └── .gitignore
+├── skills/                   # Skills = CLI tools + Claude Code command definitions
+│   └── yt-research/          # YouTube transcript fetching & analysis
+│       ├── index.ts          # CLI entry point
+│       ├── transcript.ts     # Transcript fetching (Supadata + ScrapeCreators)
+│       ├── video_meta.ts     # Video metadata fetching
+│       ├── cache.ts          # File-based caching
+│       ├── formatter.ts      # Output formatting
+│       ├── url_parser.ts     # YouTube URL parsing
+│       ├── types.ts          # TypeScript interfaces
+│       ├── config.ts         # Env config
+│       ├── package.json
+│       ├── .env              # API keys (gitignored)
+│       └── output/           # Cached transcripts (gitignored)
+├── .claude/
+│   ├── commands/
+│   │   └── yt-research.md    # Skill definition → exposes /yt-research command
+│   └── settings.local.json
 ├── extension/                # WXT browser extension
 │   ├── wxt.config.ts         # WXT config, manifest permissions
 │   ├── tsconfig.json
@@ -153,6 +170,34 @@ ttyd -W -p 7681 bash -c "cd ~/sessions && export CLAUDE_CODE_SSE_PORT=$MCP_PORT 
 - **Extension logs**: Chrome DevTools → background service worker console, or the YouTube tab console
 - **Test context API**: `curl -X POST http://localhost:8080/api/context -H "Content-Type: application/json" -d '{"site":"youtube","title":"Test"}'`
 
+## Skills
+
+Skills give the Claude Code instance on the sprite domain-specific tools. Each skill is:
+
+1. **A self-contained CLI** in `skills/<name>/` — a Node.js package with its own deps, invoked via `npm run --prefix skills/<name> cli -- <command>`
+2. **A Claude Code command** in `.claude/commands/<name>.md` — documents the CLI and tells Claude when/how to use it. Exposes a `/name` slash command.
+
+### How skills work at runtime
+
+- The Claude Code instance (running in ttyd on the sprite) sees `.claude/commands/*.md` and gains the `/skill-name` slash commands.
+- When a skill is relevant (e.g. user is on YouTube → use yt-research), Claude invokes the CLI via bash.
+- Skills cache their output locally in `skills/<name>/output/` so repeated queries are fast.
+- API keys live in `skills/<name>/.env` (gitignored).
+
+### Adding a new skill
+
+1. Create `skills/<new-skill>/` with a CLI entry point and `package.json`
+2. Create `.claude/commands/<new-skill>.md` documenting the CLI and workflow
+3. Run `npm install` in the skill directory on the sprite
+4. Add the `.env` with any required API keys on the sprite
+5. Add permission rules to `.claude/settings.local.json` if needed
+
+### Available skills
+
+| Skill | Description | Trigger |
+|-------|-------------|---------|
+| `yt-research` | Fetch YouTube transcripts & metadata | User is on a YouTube video page |
+
 ## Key Decisions
 
 - Single sprite, single user (personal project)
@@ -161,6 +206,7 @@ ttyd -W -p 7681 bash -c "cd ~/sessions && export CLAUDE_CODE_SSE_PORT=$MCP_PORT 
 - MCP WebSocket protocol for real-time Claude Code status line updates (same protocol as VS Code/JetBrains plugins)
 - `context.json` as a secondary context store (Claude Code can also read it directly)
 - Content scripts are per-site (YouTube first, more can be added)
+- Skills are self-contained CLI packages, not MCP servers — simpler to develop and debug
 
 ## Adding a New Site Integration
 

@@ -1,0 +1,48 @@
+# YouTube Research
+
+Use the YouTube research CLI to fetch transcripts, get video metadata, and analyze video content.
+
+When the user is on a YouTube page (check context.json for the current URL), automatically fetch the transcript if needed before answering questions about the video.
+
+## Commands
+
+### Fetch a video transcript
+```bash
+npm run --prefix skills/yt-research cli -- transcript "<url-or-video-id>" [--force]
+```
+Downloads the transcript and caches it to `skills/yt-research/output/videos/{videoId}/`. Uses Supadata with ScrapeCreators fallback.
+
+### Get video metadata
+```bash
+npm run --prefix skills/yt-research cli -- info "<url-or-video-id>"
+```
+
+### Fetch multiple transcripts
+```bash
+npm run --prefix skills/yt-research cli -- batch "<url1>" "<url2>" "<url3>" [--force]
+```
+
+### List cached videos
+```bash
+npm run --prefix skills/yt-research cli -- list
+```
+
+## Workflow
+
+1. Check `context.json` for the current page URL — if it's a YouTube video, extract the video ID.
+2. Use `transcript` to fetch the video transcript. It's cached automatically.
+3. Read the cached `transcript.md` file — it includes metadata headers and the full transcript text.
+4. Answer the user's question using the transcript content. Ground your answers in actual quotes and language from the transcript.
+
+## Caching
+
+Transcripts are cached at `skills/yt-research/output/videos/{videoId}/`. Once fetched, a transcript won't be re-fetched unless `--force` is passed. Each cached video has:
+- `transcript.md` — formatted with metadata header
+- `transcript.txt` — raw text only
+- `meta.json` — video metadata (title, channel, duration, etc.)
+
+## Notes
+
+- Transcript provider chain: Supadata → ScrapeCreators fallback. Fallback triggers on empty or suspiciously short transcripts.
+- Supports all YouTube URL formats: watch, youtu.be, shorts, embed, live, or bare video IDs.
+- The `$ARGUMENTS` from the user should guide what videos to fetch and how to analyze them.
