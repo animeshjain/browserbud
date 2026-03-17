@@ -34,12 +34,26 @@ function showSetup() {
   setupUrl.focus();
 }
 
+// Track the current server URL for postMessage targeting
+let currentServerUrl: string | null = null;
+
 function showTerminal(url: string) {
   setupScreen.style.display = "none";
   terminalFrame.style.display = "block";
+  currentServerUrl = url;
   if (terminalFrame.src !== url) {
     terminalFrame.src = url;
   }
+}
+
+// Type text into the Claude Code terminal via the injected bridge script
+function typeInTerminal(text: string) {
+  if (!terminalFrame.contentWindow || !currentServerUrl) return;
+  const origin = new URL(currentServerUrl).origin;
+  terminalFrame.contentWindow.postMessage(
+    { type: "browserbud:type-text", text },
+    origin,
+  );
 }
 
 // First-time setup
@@ -91,6 +105,13 @@ settingsSave.addEventListener("click", async () => {
 
 settingsUrl.addEventListener("keydown", (e) => {
   if (e.key === "Enter") settingsSave.click();
+});
+
+// Listen for typeInTerminal messages from background/content scripts
+browser.runtime.onMessage.addListener((message: { type: string; text?: string }) => {
+  if (message.type === "typeInTerminal" && message.text) {
+    typeInTerminal(message.text);
+  }
 });
 
 // Init: load stored URL or show setup

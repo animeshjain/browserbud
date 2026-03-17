@@ -19,6 +19,47 @@ const CONTEXT_DIR = path.join(DATA_DIR, "context");
 const CONTEXT_FILE = path.join(CONTEXT_DIR, "current.json");
 const CACHE_DIR = path.join(DATA_DIR, "cache", "youtube");
 
+// ─── Terminal Bridge Script ─────────────────────────────────────────────────
+// Injected into ttyd's HTML page. Captures the ttyd WebSocket and listens for
+// postMessage from the extension side panel to type text into the terminal.
+
+const BRIDGE_SCRIPT = `
+(function() {
+  var ttydSocket = null;
+  var NativeWebSocket = window.WebSocket;
+
+  // Subclass WebSocket to capture ttyd's connection
+  class BrowserBudWebSocket extends NativeWebSocket {
+    constructor(url, protocols) {
+      super(url, protocols);
+      if (url.toString().includes('/ws')) {
+        ttydSocket = this;
+        console.log('[BrowserBud] Captured ttyd WebSocket');
+        // Re-capture on reconnect
+        this.addEventListener('close', function() {
+          if (ttydSocket === this) ttydSocket = null;
+        });
+      }
+    }
+  }
+  window.WebSocket = BrowserBudWebSocket;
+
+  window.addEventListener('message', function(event) {
+    if (!event.data || event.data.type !== 'browserbud:type-text') return;
+    if (!ttydSocket || ttydSocket.readyState !== WebSocket.OPEN) {
+      console.warn('[BrowserBud] No active ttyd WebSocket');
+      return;
+    }
+    var text = event.data.text || '';
+    if (!text) return;
+
+    // ttyd protocol: string frame, '0' prefix = CMD_INPUT
+    ttydSocket.send('0' + text);
+    console.log('[BrowserBud] Typed into terminal:', text);
+  });
+})();
+`;
+
 // ─── IDE MCP WebSocket Server ───────────────────────────────────────────────
 
 const IDE_DIR = path.join(process.env.HOME, ".claude", "ide");
@@ -306,6 +347,50 @@ function handleTranscript(req, res) {
   });
 }
 
+function handleFrame(req, res) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
+    return;
+  }
+
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", () => {
+    try {
+      const { videoId, timestamp, image } = JSON.parse(body);
+
+      if (!videoId || !image) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "videoId and image are required" }));
+        return;
+      }
+
+      const totalSeconds = Math.floor(timestamp || 0);
+      const mm = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+      const ss = String(totalSeconds % 60).padStart(2, "0");
+      const filename = `frame_${mm}_${ss}.jpg`;
+
+      const videoDir = path.join(CACHE_DIR, videoId);
+      fs.mkdirSync(videoDir, { recursive: true });
+
+      // Strip data URL prefix if present
+      const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
+      fs.writeFileSync(path.join(videoDir, filename), base64Data, "base64");
+
+      const relativePath = `cache/youtube/${videoId}/${filename}`;
+      log("frame", `Captured ${relativePath}`);
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, path: relativePath }));
+    } catch (err) {
+      log("frame", `Error: ${err.message}`);
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid request" }));
+    }
+  });
+}
+
 const server = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -323,6 +408,51 @@ const server = http.createServer((req, res) => {
 
   if (req.url === "/api/transcript") {
     return handleTranscript(req, res);
+  }
+
+  if (req.url === "/api/frame") {
+    return handleFrame(req, res);
+  }
+
+  // Serve the bridge script
+  if (req.url === "/browserbud-bridge.js") {
+    res.writeHead(200, {
+      "Content-Type": "application/javascript",
+      "Cache-Control": "no-cache",
+    });
+    res.end(BRIDGE_SCRIPT);
+    return;
+  }
+
+  // Inject bridge script into ttyd's root HTML page
+  if (req.url === "/" && req.method === "GET") {
+    http.get(`http://localhost:${TTYD_PORT}/`, (ttydRes) => {
+      const chunks = [];
+      ttydRes.on("data", (chunk) => chunks.push(chunk));
+      ttydRes.on("end", () => {
+        let html = Buffer.concat(chunks).toString();
+        // Inject before </head> so it runs before ttyd's JS
+        html = html.replace(
+          "</head>",
+          '  <script src="/browserbud-bridge.js"></script>\n  </head>',
+        );
+        res.writeHead(200, {
+          "Content-Type": "text/html",
+          "Access-Control-Allow-Origin": "*",
+        });
+        res.end(html);
+      });
+      ttydRes.on("error", (err) => {
+        log("proxy", `Failed to fetch ttyd HTML: ${err.message}`);
+        res.writeHead(502, { "Content-Type": "text/plain" });
+        res.end("Bad Gateway — ttyd not ready");
+      });
+    }).on("error", (err) => {
+      log("proxy", `Failed to connect to ttyd: ${err.message}`);
+      res.writeHead(502, { "Content-Type": "text/plain" });
+      res.end("Bad Gateway — ttyd not ready");
+    });
+    return;
   }
 
   proxy.web(req, res);

@@ -43,6 +43,29 @@ async function sendTranscript(data: {
     );
 }
 
+async function sendFrame(videoId: string, timestamp: number, image: string) {
+  const serverUrl = await getServerUrl();
+  const res = await fetch(`${serverUrl}/api/frame`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ videoId, timestamp, image }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`POST /api/frame failed (${res.status}): ${text}`);
+  }
+  const result = await res.json();
+  if (!result.ok || !result.path) {
+    throw new Error(`POST /api/frame unexpected response: ${JSON.stringify(result)}`);
+  }
+  console.log(`BrowserBud: frame saved to ${result.path}`);
+  // Type the file reference into Claude Code's terminal input
+  browser.runtime.sendMessage({
+    type: "typeInTerminal",
+    text: `@${result.path} `,
+  });
+}
+
 export default defineBackground(() => {
   if (isChrome) {
     // Chrome: per-tab side panel — disabled globally, enabled per tab on click
@@ -65,7 +88,7 @@ export default defineBackground(() => {
     });
   }
 
-  // Forward context and transcript data from content scripts to the server
+  // Forward context, transcript, and frame data from content scripts to the server
   browser.runtime.onMessage.addListener((message) => {
     if (message.type === "context") {
       sendContext(message.data);
@@ -77,6 +100,8 @@ export default defineBackground(() => {
         meta: message.meta,
         source: message.source,
       });
+    } else if (message.type === "captureFrame") {
+      sendFrame(message.videoId, message.timestamp, message.image);
     }
   });
 
