@@ -1,17 +1,32 @@
 import { defineConfig } from "wxt";
 
 export default defineConfig({
-  manifest: {
+  manifest: ({ browser }) => ({
     name: "BrowserBud",
     description: "AI terminal in your browser via Claude Code",
     version: "0.1.0",
-    permissions: ["sidePanel", "activeTab", "tabs"],
+    permissions: [
+      "activeTab",
+      "tabs",
+      ...(browser === "chrome" ? ["sidePanel" as const] : []),
+    ],
     host_permissions: ["https://aj-sprite-lgk.sprites.app/*"],
     action: {
       default_title: "Open BrowserBud",
     },
-    side_panel: {
-      default_path: "sidepanel/index.html",
-    },
-  },
+    // Chrome: side_panel manifest key
+    ...(browser === "chrome" && {
+      side_panel: {
+        default_path: "sidepanel/index.html",
+      },
+    }),
+    // Firefox: sidebar_action manifest key
+    ...(browser === "firefox" && {
+      sidebar_action: {
+        default_panel: "sidepanel/index.html",
+        default_title: "BrowserBud",
+        open_at_install: false,
+      },
+    }),
+  }),
 });
