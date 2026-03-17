@@ -87,13 +87,22 @@ export default defineContentScript({
       if (!videoId || SENT_IDS.has(videoId)) return;
 
       const player = document.querySelector("#movie_player") as any;
-      if (!player?.getPlayerResponse) return;
+      if (!player?.getPlayerResponse) {
+        console.log("[BrowserBud] No player or getPlayerResponse for", videoId);
+        return;
+      }
 
       const playerRes = player.getPlayerResponse();
-      if (!playerRes) return;
+      if (!playerRes) {
+        console.log("[BrowserBud] getPlayerResponse() returned null for", videoId);
+        return;
+      }
 
+      const captions = playerRes?.captions;
       const tracks: CaptionTrack[] | undefined =
-        playerRes?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+        captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      console.log("[BrowserBud] Caption tracks for", videoId, ":", JSON.stringify(tracks?.map((t: CaptionTrack) => ({ lang: t.languageCode, kind: t.kind, url: t.baseUrl?.slice(0, 80) })) || null));
+
       if (!tracks?.length) {
         console.log("[BrowserBud] No caption tracks found for", videoId);
         window.postMessage(
@@ -112,6 +121,7 @@ export default defineContentScript({
       );
       const track = englishTrack || autoEnglish || tracks[0];
       const lang = track.languageCode;
+      console.log("[BrowserBud] Selected track:", lang, track.kind || "manual");
 
       // Extract metadata from player response
       const videoDetails = playerRes?.videoDetails;
@@ -130,20 +140,24 @@ export default defineContentScript({
         const url = fmt ? `${track.baseUrl}&fmt=${fmt}` : track.baseUrl;
         try {
           const res = await fetch(url, { credentials: "include" });
+          console.log(`[BrowserBud] Fetch fmt=${fmt || "xml"}: status=${res.status}`);
           if (!res.ok) continue;
 
           let segments: TranscriptSegment[];
           if (fmt === "json3") {
             const text = await res.text();
+            console.log(`[BrowserBud] json3 response length: ${text.length}`);
             if (!text || text.length < 10) continue;
             const json = JSON.parse(text);
             segments = parseJson3(json);
           } else {
             const text = await res.text();
+            console.log(`[BrowserBud] xml response length: ${text.length}`);
             if (!text || text.length < 10) continue;
             segments = parseXml(text);
           }
 
+          console.log(`[BrowserBud] Parsed ${segments.length} segments from fmt=${fmt || "xml"}`);
           if (segments.length === 0) continue;
 
           // Decode HTML entities in segment text
