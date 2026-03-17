@@ -10,6 +10,29 @@ function sendContext(data: Record<string, string>) {
   }).catch((err) => console.error("BrowserBud: failed to send context", err));
 }
 
+function sendTranscript(data: {
+  videoId: string;
+  text: string;
+  lang: string;
+  meta: Record<string, string>;
+  source: string;
+}) {
+  fetch(`${SPRITE_URL}/api/transcript`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  })
+    .then((res) => res.json())
+    .then((result) => {
+      if (result.ok) {
+        console.log(`BrowserBud: transcript cached for ${data.videoId}`);
+      }
+    })
+    .catch((err) =>
+      console.error("BrowserBud: failed to send transcript", err),
+    );
+}
+
 export default defineBackground(() => {
   if (isChrome) {
     // Chrome: per-tab side panel — disabled globally, enabled per tab on click
@@ -32,10 +55,18 @@ export default defineBackground(() => {
     });
   }
 
-  // Forward context from content scripts to the sprite
+  // Forward context and transcript data from content scripts to the sprite
   browser.runtime.onMessage.addListener((message) => {
     if (message.type === "context") {
       sendContext(message.data);
+    } else if (message.type === "transcript") {
+      sendTranscript({
+        videoId: message.videoId,
+        text: message.text,
+        lang: message.lang,
+        meta: message.meta,
+        source: message.source,
+      });
     }
   });
 

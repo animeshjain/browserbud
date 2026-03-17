@@ -14,6 +14,12 @@ export default defineConfig({
     action: {
       default_title: "Open BrowserBud",
     },
+    web_accessible_resources: [
+      {
+        resources: ["youtube-player.js"],
+        matches: ["*://*.youtube.com/*"],
+      },
+    ],
     // Chrome: side_panel manifest key
     ...(browser === "chrome" && {
       side_panel: {

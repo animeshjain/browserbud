@@ -41,8 +41,10 @@ Transcripts are cached at `cache/youtube/{videoId}/`. Once fetched, a transcript
 - `transcript.txt` — raw text only
 - `meta.json` — video metadata (title, channel, duration, etc.)
 
+**Note:** The browser extension automatically extracts transcripts client-side when the user navigates to a YouTube video. These are pre-cached via `/api/transcript`, so in most cases the transcript will already be available when you run the CLI. The CLI only needs to fetch from APIs as a fallback.
+
 ## Notes
 
-- Transcript provider chain: Supadata → ScrapeCreators fallback. Fallback triggers on empty or suspiciously short transcripts.
+- Transcript provider chain: browser extension (client-side) → Supadata → ScrapeCreators fallback. The browser extension proactively caches transcripts, so the API fallback is rarely needed.
 - Supports all YouTube URL formats: watch, youtu.be, shorts, embed, live, or bare video IDs.
 - The `$ARGUMENTS` from the user should guide what videos to fetch and how to analyze them.

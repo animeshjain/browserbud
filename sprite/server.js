@@ -10,6 +10,7 @@ const PROXY_PORT = 8080;
 const DATA_DIR = process.env.BROWSERBUD_DATA_DIR || path.join(process.env.HOME, "browse");
 const CONTEXT_DIR = path.join(DATA_DIR, "context");
 const CONTEXT_FILE = path.join(CONTEXT_DIR, "current.json");
+const CACHE_DIR = path.join(DATA_DIR, "cache", "youtube");
 
 // ─── IDE MCP WebSocket Server ───────────────────────────────────────────────
 
@@ -70,9 +71,12 @@ function startMcpServer() {
   // Listen on random port, localhost only
   mcpServer.listen(0, "127.0.0.1", () => {
     mcpPort = mcpServer.address().port;
-    writeLockFile();
     console.log(`[MCP] IDE server listening on 127.0.0.1:${mcpPort}`);
-    // Write port to file so start.sh can read it for env vars
+    // Write port to file so start.sh can pass it as CLAUDE_CODE_SSE_PORT
+    // Note: we intentionally do NOT write a lock file — the ttyd Claude instance
+    // connects via CLAUDE_CODE_SSE_PORT env var. A lock file would cause every
+    // Claude instance on this machine to discover and connect, polluting their
+    // context with browser data.
     fs.writeFileSync(path.join(IDE_DIR, "browserbud.port"), String(mcpPort));
   });
 
@@ -115,25 +119,13 @@ function handleMcpMessage(ws, msg) {
   }
 }
 
-function writeLockFile() {
-  const lockPath = path.join(IDE_DIR, `${mcpPort}.lock`);
-  const lockData = {
-    pid: process.pid,
-    workspaceFolders: [DATA_DIR],
-    ideName: "BrowserBud",
-    transport: "ws",
-    authToken,
-  };
-  fs.writeFileSync(lockPath, JSON.stringify(lockData, null, 2));
-  console.log(`[MCP] Lock file written: ${lockPath}`);
-}
-
 function removeLockFile() {
+  // Clean up any stale lock files from previous runs that used lock file discovery
   if (mcpPort) {
     const lockPath = path.join(IDE_DIR, `${mcpPort}.lock`);
     try {
       fs.unlinkSync(lockPath);
-      console.log(`[MCP] Lock file removed: ${lockPath}`);
+      console.log(`[MCP] Stale lock file removed: ${lockPath}`);
     } catch {}
   }
 }
@@ -218,6 +210,93 @@ function handleContext(req, res) {
   }
 }
 
+function handleTranscript(req, res) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
+    return;
+  }
+
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", () => {
+    try {
+      const { videoId, text, meta, lang, source } = JSON.parse(body);
+
+      if (!videoId || !text) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "videoId and text are required" }));
+        return;
+      }
+
+      const videoDir = path.join(CACHE_DIR, videoId);
+
+      // Skip if already cached (don't overwrite server-side fetched transcripts)
+      if (fs.existsSync(path.join(videoDir, "transcript.md"))) {
+        console.log(`[Transcript] Already cached: ${videoId}`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, videoId, cached: true, existing: true }));
+        return;
+      }
+
+      fs.mkdirSync(videoDir, { recursive: true });
+
+      // Build metadata for the markdown header
+      const title = meta?.title || videoId;
+      const channel = meta?.channel || "Unknown";
+      const duration = meta?.duration || "";
+      const url = meta?.url || `https://www.youtube.com/watch?v=${videoId}`;
+
+      // Format transcript markdown (same format as yt-research skill)
+      const mdLines = [
+        `# ${title}`,
+        "",
+        `- **Channel:** ${channel}`,
+        ...(duration ? [`- **Duration:** ${duration}`] : []),
+        `- **URL:** ${url}`,
+        `- **Transcript source:** ${source || "client"}`,
+        ...(lang ? [`- **Language:** ${lang}`] : []),
+        `- **Cached:** ${new Date().toISOString()}`,
+        "",
+        "---",
+        "",
+        "## Transcript",
+        "",
+        text,
+        "",
+      ];
+
+      fs.writeFileSync(path.join(videoDir, "transcript.md"), mdLines.join("\n"));
+      fs.writeFileSync(path.join(videoDir, "transcript.txt"), text);
+      fs.writeFileSync(
+        path.join(videoDir, "meta.json"),
+        JSON.stringify(
+          {
+            title,
+            channel,
+            duration,
+            url,
+            videoId,
+            source: source || "client",
+            lang: lang || "en",
+            cachedAt: new Date().toISOString(),
+          },
+          null,
+          2,
+        ),
+      );
+
+      console.log(`[Transcript] Cached ${videoId}: ${text.length} chars via ${source || "client"}`);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, videoId, cached: true }));
+    } catch (err) {
+      console.error("[Transcript] Error:", err.message);
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid request" }));
+    }
+  });
+}
+
 const server = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -231,6 +310,10 @@ const server = http.createServer((req, res) => {
 
   if (req.url === "/api/context") {
     return handleContext(req, res);
+  }
+
+  if (req.url === "/api/transcript") {
+    return handleTranscript(req, res);
   }
 
   proxy.web(req, res);
