@@ -5,6 +5,13 @@ const httpProxy = require("http-proxy");
 const { WebSocketServer } = require("ws");
 const { v4: uuidv4 } = require("uuid");
 
+// ─── Logging ────────────────────────────────────────────────────────────────
+
+function log(tag, message) {
+  const time = new Date().toLocaleTimeString("en-US", { hour12: false });
+  console.log(`  ${time}  [${tag}]  ${message}`);
+}
+
 const TTYD_PORT = 7681;
 const PROXY_PORT = 8080;
 const DATA_DIR = process.env.BROWSERBUD_DATA_DIR || path.join(process.env.HOME, "browse");
@@ -28,7 +35,6 @@ function startMcpServer() {
   mcpServer.on("upgrade", (req, socket, head) => {
     const token = req.headers["x-claude-code-ide-authorization"];
     if (token !== authToken) {
-      console.log("[MCP] Auth rejected");
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;
@@ -39,26 +45,25 @@ function startMcpServer() {
   });
 
   wss.on("connection", (ws) => {
-    console.log("[MCP] Claude Code connected");
+    log("mcp", "Claude Code connected");
     connectedClients.add(ws);
 
     ws.on("message", (data) => {
       try {
         const msg = JSON.parse(data);
-        console.log("[MCP] Received:", msg.method || `response:${msg.id}`);
         handleMcpMessage(ws, msg);
       } catch (err) {
-        console.error("[MCP] Bad message:", err.message);
+        log("mcp", `Bad message: ${err.message}`);
       }
     });
 
-    ws.on("close", (code, reason) => {
-      console.log(`[MCP] Claude Code disconnected (code: ${code}, reason: ${reason})`);
+    ws.on("close", () => {
+      log("mcp", "Claude Code disconnected");
       connectedClients.delete(ws);
     });
 
     ws.on("error", (err) => {
-      console.error("[MCP] WebSocket error:", err.message);
+      log("mcp", `WebSocket error: ${err.message}`);
     });
 
     // Ping every 30s
@@ -71,7 +76,7 @@ function startMcpServer() {
   // Listen on random port, localhost only
   mcpServer.listen(0, "127.0.0.1", () => {
     mcpPort = mcpServer.address().port;
-    console.log(`[MCP] IDE server listening on 127.0.0.1:${mcpPort}`);
+    log("mcp", `IDE integration server on port ${mcpPort}`);
     // Write port to file so start.sh can pass it as CLAUDE_CODE_SSE_PORT
     // Note: we intentionally do NOT write a lock file — the ttyd Claude instance
     // connects via CLAUDE_CODE_SSE_PORT env var. A lock file would cause every
@@ -125,7 +130,7 @@ function removeLockFile() {
     const lockPath = path.join(IDE_DIR, `${mcpPort}.lock`);
     try {
       fs.unlinkSync(lockPath);
-      console.log(`[MCP] Stale lock file removed: ${lockPath}`);
+      log("mcp", `Stale lock file removed: ${lockPath}`);
     } catch {}
   }
 }
@@ -159,7 +164,11 @@ function broadcastSelection(context) {
       ws.send(notification);
     }
   }
-  console.log(`[MCP] Broadcast selection_changed to ${connectedClients.size} client(s): ${displayText}`);
+  if (displayText) {
+    log("context", displayText);
+  } else {
+    log("context", "Cleared (no active page)");
+  }
 }
 
 // ─── HTTP Proxy + Context API ───────────────────────────────────────────────
@@ -170,7 +179,7 @@ const proxy = httpProxy.createProxyServer({
 });
 
 proxy.on("error", (err, req, res) => {
-  console.error("Proxy error:", err.message);
+  log("proxy", `Error: ${err.message}`);
   if (res.writeHead) {
     res.writeHead(502, { "Content-Type": "text/plain" });
     res.end("Bad Gateway — ttyd not ready");
@@ -233,7 +242,7 @@ function handleTranscript(req, res) {
 
       // Skip if already cached (don't overwrite server-side fetched transcripts)
       if (fs.existsSync(path.join(videoDir, "transcript.md"))) {
-        console.log(`[Transcript] Already cached: ${videoId}`);
+        log("transcript", `Already cached: ${videoId}`);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true, videoId, cached: true, existing: true }));
         return;
@@ -286,11 +295,11 @@ function handleTranscript(req, res) {
         ),
       );
 
-      console.log(`[Transcript] Cached ${videoId}: ${text.length} chars via ${source || "client"}`);
+      log("transcript", `Cached "${title}" (${videoId}, ${text.length} chars, via ${source || "client"})`);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, videoId, cached: true }));
     } catch (err) {
-      console.error("[Transcript] Error:", err.message);
+      log("transcript", `Error: ${err.message}`);
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Invalid request" }));
     }
@@ -327,9 +336,7 @@ server.on("upgrade", (req, socket, head) => {
 
 const mcpServer = startMcpServer();
 
-server.listen(PROXY_PORT, () => {
-  console.log(`Proxy server listening on port ${PROXY_PORT}, forwarding to ttyd on port ${TTYD_PORT}`);
-});
+server.listen(PROXY_PORT);
 
 function cleanup() {
   removeLockFile();

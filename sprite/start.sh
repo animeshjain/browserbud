@@ -3,7 +3,17 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-WORK_DIR="$HOME/browse"
+
+# Source root .env for all config (API keys, data dir, etc.)
+if [ -f "$REPO_DIR/.env" ]; then
+  set -a
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+# Expand ~ to $HOME (shell doesn't expand ~ in quoted variable values)
+WORK_DIR="${BROWSERBUD_DATA_DIR:-$HOME/browse}"
+WORK_DIR="${WORK_DIR/#\~/$HOME}"
 PORT_FILE="$HOME/.claude/ide/browserbud.port"
 
 # Create userland directory structure
@@ -83,10 +93,9 @@ HEREDOC
 # Export data dir for server.js and skills
 export BROWSERBUD_DATA_DIR="$WORK_DIR"
 
-# Start proxy server first (creates MCP WebSocket server + lock file)
-node "$SCRIPT_DIR/server.js" &
+# Start proxy server (logs flow to stdout)
+node "$SCRIPT_DIR/server.js" 2>&1 &
 PROXY_PID=$!
-echo "Started proxy server (PID $PROXY_PID)"
 
 # Wait for MCP port file to appear
 for i in $(seq 1 30); do
@@ -96,22 +105,36 @@ done
 
 if [ -f "$PORT_FILE" ]; then
   MCP_PORT=$(cat "$PORT_FILE")
-  echo "MCP server on port $MCP_PORT"
 else
-  echo "Warning: MCP port file not found, Claude Code won't auto-connect"
+  echo "Warning: MCP port file not found, Claude Code won't auto-connect to browser"
   MCP_PORT=""
 fi
 
-# Start ttyd with IDE integration env vars + data dir
+# Start ttyd (suppress its verbose logs)
 ttyd -W -p 7681 bash -c "
   cd $WORK_DIR
   export CLAUDE_CODE_SSE_PORT=$MCP_PORT
   export ENABLE_IDE_INTEGRATION=true
   export BROWSERBUD_DATA_DIR=$WORK_DIR
-  exec claude --dangerously-skip-permissions
-" &
+  exec claude
+" > /dev/null 2>&1 &
 TTYD_PID=$!
-echo "Started ttyd (PID $TTYD_PID)"
+
+# Print startup summary
+echo ""
+echo "  BrowserBud is running"
+echo ""
+echo "  Data directory:  $WORK_DIR"
+echo "  Server:          http://localhost:8080"
+echo ""
+echo "  Open the BrowserBud extension in Chrome and enter"
+echo "  this URL when prompted:"
+echo ""
+echo "    http://localhost:8080"
+echo ""
+echo "  If running on a remote machine, use its public URL instead."
+echo "  Press Ctrl+C to stop."
+echo ""
 
 # Trap to clean up both processes
 cleanup() {
@@ -120,6 +143,5 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Wait for either to exit
-wait -n
-cleanup
+# Wait for both processes (cleanup runs via EXIT trap)
+wait $TTYD_PID $PROXY_PID

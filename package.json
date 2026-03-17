@@ -1,0 +1,11 @@
+{
+  "name": "browserbud",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "setup": "npm install --prefix sprite && npm install --prefix skills/yt-research && npm install --prefix extension",
+    "start": "bash sprite/start.sh",
+    "build:extension": "npm run --prefix extension build",
+    "dev:extension": "npm run --prefix extension dev"
+  }
+}

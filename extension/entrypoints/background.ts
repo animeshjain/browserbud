@@ -1,23 +1,33 @@
-const SPRITE_URL = "https://aj-sprite-lgk.sprites.app";
+import { storage } from "wxt/utils/storage";
+
+const SERVER_URL_KEY = "local:serverUrl";
+const DEFAULT_SERVER_URL = "http://localhost:8080";
 
 const isChrome = !!globalThis.chrome?.sidePanel;
 
-function sendContext(data: Record<string, string>) {
-  fetch(`${SPRITE_URL}/api/context`, {
+async function getServerUrl(): Promise<string> {
+  const url = await storage.getItem<string>(SERVER_URL_KEY);
+  return url || DEFAULT_SERVER_URL;
+}
+
+async function sendContext(data: Record<string, string>) {
+  const serverUrl = await getServerUrl();
+  fetch(`${serverUrl}/api/context`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   }).catch((err) => console.error("BrowserBud: failed to send context", err));
 }
 
-function sendTranscript(data: {
+async function sendTranscript(data: {
   videoId: string;
   text: string;
   lang: string;
   meta: Record<string, string>;
   source: string;
 }) {
-  fetch(`${SPRITE_URL}/api/transcript`, {
+  const serverUrl = await getServerUrl();
+  fetch(`${serverUrl}/api/transcript`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -55,7 +65,7 @@ export default defineBackground(() => {
     });
   }
 
-  // Forward context and transcript data from content scripts to the sprite
+  // Forward context and transcript data from content scripts to the server
   browser.runtime.onMessage.addListener((message) => {
     if (message.type === "context") {
       sendContext(message.data);

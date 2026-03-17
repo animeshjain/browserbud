@@ -8,9 +8,10 @@ export default defineConfig({
     permissions: [
       "activeTab",
       "tabs",
+      "storage",
       ...(browser === "chrome" ? ["sidePanel" as const] : []),
     ],
-    host_permissions: ["https://aj-sprite-lgk.sprites.app/*"],
+    host_permissions: ["<all_urls>"],
     action: {
       default_title: "Open BrowserBud",
     },
