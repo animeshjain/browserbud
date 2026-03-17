@@ -20,3 +20,7 @@ export const REQUEST_TIMEOUT_MS = 65_000;
 // Minimum words-per-minute threshold for "suspiciously short" detection
 // Normal speech is 120-180 WPM; set conservatively low
 export const MIN_WPM = 30;
+
+// Server URL for client-side transcript extraction via the browser extension
+export const BROWSERBUD_SERVER_URL =
+  process.env.BROWSERBUD_SERVER_URL || "http://localhost:8080";

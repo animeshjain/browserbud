@@ -212,6 +212,159 @@ function broadcastSelection(context) {
   }
 }
 
+// ─── Extension WebSocket (bidirectional command channel) ────────────────────
+
+let extensionWs = null;
+const pendingRequests = new Map(); // requestId -> { resolve, reject, timer }
+
+const extensionWss = new WebSocketServer({ noServer: true });
+
+extensionWss.on("connection", (ws) => {
+  log("ext-ws", "Extension connected");
+  extensionWs = ws;
+
+  ws.on("message", (data) => {
+    try {
+      const msg = JSON.parse(data);
+      if (msg.type === "extract-transcript-result" && msg.requestId) {
+        const pending = pendingRequests.get(msg.requestId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          pendingRequests.delete(msg.requestId);
+          pending.resolve(msg);
+        }
+      }
+    } catch (err) {
+      log("ext-ws", `Bad message: ${err.message}`);
+    }
+  });
+
+  ws.on("close", () => {
+    log("ext-ws", "Extension disconnected");
+    if (extensionWs === ws) extensionWs = null;
+    // Reject all pending requests
+    for (const [id, pending] of pendingRequests) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error("Extension disconnected"));
+      pendingRequests.delete(id);
+    }
+  });
+
+  ws.on("error", (err) => {
+    log("ext-ws", `Error: ${err.message}`);
+  });
+
+  // Ping every 30s
+  const pingInterval = setInterval(() => {
+    if (ws.readyState === ws.OPEN) ws.ping();
+  }, 30000);
+  ws.on("close", () => clearInterval(pingInterval));
+});
+
+function sendExtensionCommand(command) {
+  return new Promise((resolve, reject) => {
+    if (!extensionWs || extensionWs.readyState !== extensionWs.OPEN) {
+      reject(new Error("Extension not connected"));
+      return;
+    }
+
+    const requestId = uuidv4();
+    const timer = setTimeout(() => {
+      pendingRequests.delete(requestId);
+      reject(new Error("Timeout waiting for extension response"));
+    }, 15000);
+
+    pendingRequests.set(requestId, { resolve, reject, timer });
+    extensionWs.send(JSON.stringify({ ...command, requestId }));
+  });
+}
+
+function handleExtractTranscript(req, res) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
+    return;
+  }
+
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", async () => {
+    try {
+      const { videoId } = JSON.parse(body);
+      if (!videoId) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "videoId is required" }));
+        return;
+      }
+
+      log("extract", `Requesting transcript for ${videoId} from extension...`);
+      const result = await sendExtensionCommand({
+        type: "extract-transcript",
+        videoId,
+      });
+
+      if (result.success) {
+        // Cache the transcript (reuse existing handleTranscript logic)
+        const videoDir = path.join(CACHE_DIR, videoId);
+        if (!fs.existsSync(path.join(videoDir, "transcript.txt"))) {
+          fs.mkdirSync(videoDir, { recursive: true });
+          fs.writeFileSync(path.join(videoDir, "transcript.txt"), result.text);
+          const meta = result.meta || {};
+          const mdLines = [
+            `# ${meta.title || videoId}`,
+            "",
+            `- **Channel:** ${meta.channel || "Unknown"}`,
+            ...(meta.duration ? [`- **Duration:** ${meta.duration}`] : []),
+            `- **URL:** ${meta.url || `https://www.youtube.com/watch?v=${videoId}`}`,
+            `- **Transcript source:** client`,
+            ...(result.lang ? [`- **Language:** ${result.lang}`] : []),
+            `- **Cached:** ${new Date().toISOString()}`,
+            "",
+            "---",
+            "",
+            "## Transcript",
+            "",
+            result.text,
+            "",
+          ];
+          fs.writeFileSync(path.join(videoDir, "transcript.md"), mdLines.join("\n"));
+          fs.writeFileSync(
+            path.join(videoDir, "meta.json"),
+            JSON.stringify({
+              title: meta.title || videoId,
+              channel: meta.channel || "Unknown",
+              duration: meta.duration || "",
+              url: meta.url || `https://www.youtube.com/watch?v=${videoId}`,
+              videoId,
+              source: "client",
+              lang: result.lang || "en",
+              cachedAt: new Date().toISOString(),
+            }, null, 2),
+          );
+          log("extract", `Cached "${meta.title || videoId}" (${videoId}, ${result.text.length} chars, via client)`);
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          ok: true,
+          text: result.text,
+          lang: result.lang,
+          meta: result.meta,
+          source: "client",
+        }));
+      } else {
+        log("extract", `Failed for ${videoId}: ${result.error}`);
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: result.error || "Extraction failed" }));
+      }
+    } catch (err) {
+      log("extract", `Error: ${err.message}`);
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    }
+  });
+}
+
 // ─── HTTP Proxy + Context API ───────────────────────────────────────────────
 
 const proxy = httpProxy.createProxyServer({
@@ -414,6 +567,10 @@ const server = http.createServer((req, res) => {
     return handleFrame(req, res);
   }
 
+  if (req.url === "/api/extract-transcript") {
+    return handleExtractTranscript(req, res);
+  }
+
   // Serve the bridge script
   if (req.url === "/browserbud-bridge.js") {
     res.writeHead(200, {
@@ -459,7 +616,13 @@ const server = http.createServer((req, res) => {
 });
 
 server.on("upgrade", (req, socket, head) => {
-  proxy.ws(req, socket, head);
+  if (req.url === "/ws/extension") {
+    extensionWss.handleUpgrade(req, socket, head, (ws) => {
+      extensionWss.emit("connection", ws, req);
+    });
+  } else {
+    proxy.ws(req, socket, head);
+  }
 });
 
 // ─── Startup & Cleanup ─────────────────────────────────────────────────────

@@ -139,10 +139,20 @@ export default defineContentScript({
       }
     }
 
-    // Respond to getContext requests from the background worker (tab switch)
+    // Respond to messages from the background worker
     browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.type === "getContext") {
         sendResponse(getContext());
+      } else if (message.type === "extractTranscript") {
+        // Forward to MAIN world script via postMessage
+        window.postMessage(
+          {
+            type: "BROWSERBUD_EXTRACT_TRANSCRIPT",
+            videoId: message.videoId,
+            requestId: message.requestId,
+          },
+          "*",
+        );
       }
     });
 
@@ -163,7 +173,7 @@ export default defineContentScript({
       setTimeout(injectCaptureButton, 1500);
     }
 
-    // Listen for transcript data from MAIN world content script
+    // Listen for messages from MAIN world content script
     window.addEventListener("message", (event) => {
       if (event.source !== window) return;
 
@@ -176,6 +186,16 @@ export default defineContentScript({
           lang,
           meta,
           source: "client",
+        });
+      } else if (event.data?.type === "BROWSERBUD_EXTRACT_TRANSCRIPT_RESULT") {
+        browser.runtime.sendMessage({
+          type: "transcriptResult",
+          requestId: event.data.requestId,
+          success: event.data.success,
+          text: event.data.text,
+          lang: event.data.lang,
+          meta: event.data.meta,
+          error: event.data.error,
         });
       }
     });

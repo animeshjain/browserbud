@@ -10,6 +10,7 @@ import {
   SCRAPECREATORS_API_KEY,
   REQUEST_TIMEOUT_MS,
   MIN_WPM,
+  BROWSERBUD_SERVER_URL,
 } from "./config.js";
 import type { TranscriptResult } from "./types.js";
 
@@ -45,6 +46,38 @@ function isSuspiciouslyShort(
   const wordCount = countWords(text);
   const expectedMin = (durationSeconds / 60) * MIN_WPM;
   return wordCount < expectedMin;
+}
+
+// --- Client-side extraction via browser extension ---
+
+async function fetchFromClient(videoId: string): Promise<TranscriptResult> {
+  const response = await fetch(`${BROWSERBUD_SERVER_URL}/api/extract-transcript`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ videoId }),
+    signal: AbortSignal.timeout(20000),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Client extraction failed (${response.status}): ${body.slice(0, 200)}`);
+  }
+
+  const data = (await response.json()) as {
+    ok: boolean;
+    text?: string;
+    lang?: string;
+    error?: string;
+  };
+  if (!data.ok) {
+    throw new Error(data.error || "Client extraction returned not-ok");
+  }
+
+  return {
+    text: data.text || "",
+    lang: data.lang || null,
+    source: "client",
+  };
 }
 
 // --- Supadata ---
@@ -152,6 +185,7 @@ export async function fetchTranscript(
     name: string;
     fn: () => Promise<TranscriptResult>;
   }> = [
+    { name: "client", fn: () => fetchFromClient(videoId) },
     { name: "supadata", fn: () => fetchFromSupadata(videoId) },
   ];
 

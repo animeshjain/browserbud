@@ -66,6 +66,100 @@ async function sendFrame(videoId: string, timestamp: number, image: string) {
   });
 }
 
+// ─── Extension WebSocket (bidirectional command channel) ──────────────────
+
+let extensionSocket: WebSocket | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function connectExtensionWs() {
+  const serverUrl = await getServerUrl();
+  const wsUrl = serverUrl.replace(/^http/, "ws") + "/ws/extension";
+
+  try {
+    const ws = new WebSocket(wsUrl);
+
+    ws.addEventListener("open", () => {
+      console.log("BrowserBud: WebSocket connected to server");
+      extensionSocket = ws;
+    });
+
+    ws.addEventListener("message", async (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "extract-transcript") {
+          await handleExtractTranscriptCommand(msg);
+        }
+      } catch (err) {
+        console.error("BrowserBud: WebSocket message error", err);
+      }
+    });
+
+    ws.addEventListener("close", () => {
+      console.log("BrowserBud: WebSocket disconnected, reconnecting in 3s...");
+      extensionSocket = null;
+      reconnectTimer = setTimeout(connectExtensionWs, 3000);
+    });
+
+    ws.addEventListener("error", (err) => {
+      console.error("BrowserBud: WebSocket error", err);
+    });
+  } catch (err) {
+    console.error("BrowserBud: WebSocket connection failed", err);
+    reconnectTimer = setTimeout(connectExtensionWs, 3000);
+  }
+}
+
+async function handleExtractTranscriptCommand(msg: {
+  type: string;
+  videoId: string;
+  requestId: string;
+}) {
+  const { videoId, requestId } = msg;
+
+  // Find a YouTube tab with this video
+  const tabs = await browser.tabs.query({ url: "*://*.youtube.com/watch*" });
+  let targetTabId: number | null = null;
+
+  for (const tab of tabs) {
+    if (tab.id != null && tab.url?.includes(`v=${videoId}`)) {
+      targetTabId = tab.id;
+      break;
+    }
+  }
+
+  if (targetTabId == null) {
+    sendToServer({
+      type: "extract-transcript-result",
+      requestId,
+      success: false,
+      error: `Video ${videoId} not open in any tab`,
+    });
+    return;
+  }
+
+  // Forward to the content script on that tab
+  try {
+    await browser.tabs.sendMessage(targetTabId, {
+      type: "extractTranscript",
+      videoId,
+      requestId,
+    });
+  } catch (err) {
+    sendToServer({
+      type: "extract-transcript-result",
+      requestId,
+      success: false,
+      error: `Failed to reach content script: ${err}`,
+    });
+  }
+}
+
+function sendToServer(msg: Record<string, any>) {
+  if (extensionSocket && extensionSocket.readyState === WebSocket.OPEN) {
+    extensionSocket.send(JSON.stringify(msg));
+  }
+}
+
 export default defineBackground(() => {
   if (isChrome) {
     // Chrome: per-tab side panel — disabled globally, enabled per tab on click
@@ -102,6 +196,17 @@ export default defineBackground(() => {
       });
     } else if (message.type === "captureFrame") {
       sendFrame(message.videoId, message.timestamp, message.image);
+    } else if (message.type === "transcriptResult") {
+      // Forward extraction result back to server via WebSocket
+      sendToServer({
+        type: "extract-transcript-result",
+        requestId: message.requestId,
+        success: message.success,
+        text: message.text,
+        lang: message.lang,
+        meta: message.meta,
+        error: message.error,
+      });
     }
   });
 
@@ -120,4 +225,7 @@ export default defineBackground(() => {
       sendContext({});
     }
   });
+
+  // Start the bidirectional WebSocket connection to the server
+  connectExtensionWs();
 });

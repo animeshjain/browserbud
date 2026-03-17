@@ -12,7 +12,7 @@ export interface VideoMeta {
 export interface TranscriptResult {
   text: string;
   lang: string | null;
-  source: "supadata" | "scrapecreators";
+  source: "client" | "supadata" | "scrapecreators";
 }
 
 export interface CachedVideo {
