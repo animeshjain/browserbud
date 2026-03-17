@@ -82,6 +82,17 @@ export default defineContentScript({
       return el.value;
     }
 
+    function xhrFetch(url: string): Promise<string> {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("GET", url, true);
+        xhr.withCredentials = true;
+        xhr.onload = () => resolve(xhr.responseText);
+        xhr.onerror = () => reject(new Error(`XHR failed: ${xhr.status}`));
+        xhr.send();
+      });
+    }
+
     async function extractTranscript() {
       const videoId = getVideoId();
       if (!videoId || SENT_IDS.has(videoId)) return;
@@ -135,29 +146,24 @@ export default defineContentScript({
         url: location.href,
       };
 
-      // Try json3 first, then XML
+      // Try fetching transcript via XHR (fetch returns empty on YouTube)
       for (const fmt of ["json3", ""]) {
         const url = fmt ? `${track.baseUrl}&fmt=${fmt}` : track.baseUrl;
         try {
-          const res = await fetch(url, { credentials: "include" });
-          console.log(`[BrowserBud] Fetch fmt=${fmt || "xml"}: status=${res.status}`);
-          if (!res.ok) continue;
+          const text = await xhrFetch(url);
+          const fmtLabel = fmt || "xml";
+          console.log(`[BrowserBud] XHR fmt=${fmtLabel}: ${text.length} bytes`);
+          if (!text || text.length < 10) continue;
 
           let segments: TranscriptSegment[];
           if (fmt === "json3") {
-            const text = await res.text();
-            console.log(`[BrowserBud] json3 response length: ${text.length}`);
-            if (!text || text.length < 10) continue;
             const json = JSON.parse(text);
             segments = parseJson3(json);
           } else {
-            const text = await res.text();
-            console.log(`[BrowserBud] xml response length: ${text.length}`);
-            if (!text || text.length < 10) continue;
             segments = parseXml(text);
           }
 
-          console.log(`[BrowserBud] Parsed ${segments.length} segments from fmt=${fmt || "xml"}`);
+          console.log(`[BrowserBud] Parsed ${segments.length} segments from fmt=${fmtLabel}`);
           if (segments.length === 0) continue;
 
           // Decode HTML entities in segment text
