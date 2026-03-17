@@ -26,9 +26,8 @@ export default defineBackground(() => {
       chrome.sidePanel.open({ tabId: tab.id });
     });
   } else {
-    // Firefox: sidebar is toggled via browser.sidebarAction or the sidebar button.
-    // Clicking the action icon toggles the sidebar.
-    browser.action.onClicked.addListener(() => {
+    // Firefox MV2: browserAction (not action) + sidebarAction
+    browser.browserAction.onClicked.addListener(() => {
       browser.sidebarAction.toggle();
     });
   }
