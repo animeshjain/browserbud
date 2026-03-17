@@ -9,6 +9,18 @@ import {
   videoDir,
 } from "./cache.js";
 
+function parseDurationToSeconds(duration: string): number | null {
+  if (!duration) return null;
+  const hMatch = duration.match(/(\d+)h/);
+  const mMatch = duration.match(/(\d+)m/);
+  const sMatch = duration.match(/(\d+)s/);
+  const h = hMatch ? parseInt(hMatch[1]) : 0;
+  const m = mMatch ? parseInt(mMatch[1]) : 0;
+  const s = sMatch ? parseInt(sMatch[1]) : 0;
+  const total = h * 3600 + m * 60 + s;
+  return total > 0 ? total : null;
+}
+
 // --- Core operations ---
 
 async function transcriptCommand(
@@ -30,7 +42,8 @@ async function transcriptCommand(
   console.log(`  "${meta.title}" by ${meta.channel}`);
 
   console.log("Fetching transcript...");
-  const result = await fetchTranscript(videoId);
+  const durationSeconds = parseDurationToSeconds(meta.duration);
+  const result = await fetchTranscript(videoId, durationSeconds);
   console.log(`  Got ${result.text.length} chars via ${result.source}`);
 
   const md = formatTranscriptMarkdown(meta, result.text, result.source);
