@@ -9,7 +9,21 @@ function sendContext(data: Record<string, string>) {
 }
 
 export default defineBackground(() => {
+  // Disable the panel globally by default — it will only show on tabs
+  // where the user explicitly clicks the icon
+  chrome.sidePanel.setOptions({ enabled: false });
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+
+  // When the user clicks the action icon, enable the panel for that tab
+  chrome.action.onClicked.addListener(async (tab) => {
+    if (tab.id == null) return;
+    await chrome.sidePanel.setOptions({
+      tabId: tab.id,
+      path: "sidepanel/index.html",
+      enabled: true,
+    });
+    chrome.sidePanel.open({ tabId: tab.id });
+  });
 
   // Forward context from content scripts to the sprite
   browser.runtime.onMessage.addListener((message) => {
