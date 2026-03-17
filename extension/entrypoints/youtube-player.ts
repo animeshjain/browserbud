@@ -134,7 +134,9 @@ export default defineContentScript({
 
           let segments: TranscriptSegment[];
           if (fmt === "json3") {
-            const json = await res.json();
+            const text = await res.text();
+            if (!text || text.length < 10) continue;
+            const json = JSON.parse(text);
             segments = parseJson3(json);
           } else {
             const text = await res.text();
