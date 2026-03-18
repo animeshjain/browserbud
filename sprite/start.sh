@@ -15,6 +15,8 @@ fi
 WORK_DIR="${BROWSERBUD_DATA_DIR:-$HOME/browse}"
 WORK_DIR="${WORK_DIR/#\~/$HOME}"
 PORT_FILE="$HOME/.claude/ide/browserbud.port"
+IDE_DIR="$HOME/.claude/ide"
+TMUX_SESSION="browserbud"
 
 # Create userland directory structure
 mkdir -p "$WORK_DIR/context" "$WORK_DIR/cache/youtube" \
@@ -97,6 +99,9 @@ BROWSERBUD_TTYD_PORT="${BROWSERBUD_TTYD_PORT:-7682}"
 export BROWSERBUD_PORT
 export BROWSERBUD_TTYD_PORT
 
+# Remove stale port file so we wait for the fresh one
+rm -f "$PORT_FILE"
+
 # Start proxy server (logs flow to stdout)
 node "$SCRIPT_DIR/server.js" 2>&1 &
 PROXY_PID=$!
@@ -114,14 +119,37 @@ else
   MCP_PORT=""
 fi
 
-# Start ttyd (suppress its verbose logs)
-ttyd -W -p "$BROWSERBUD_TTYD_PORT" bash -c "
-  cd $WORK_DIR
-  export CLAUDE_CODE_SSE_PORT=$MCP_PORT
-  export ENABLE_IDE_INTEGRATION=true
-  export BROWSERBUD_DATA_DIR=$WORK_DIR
-  exec claude
-" > /dev/null 2>&1 &
+# Hide other IDE lock files so Claude Code only discovers BrowserBud's MCP server.
+# Claude Code scans ~/.claude/ide/*.lock at startup and connects to matching IDEs.
+# Without this, it may connect to IntelliJ instead of BrowserBud.
+for f in "$IDE_DIR"/*.lock; do
+  [ -f "$f" ] || continue
+  case "$(basename "$f")" in
+    "$MCP_PORT.lock") continue ;;
+  esac
+  mv "$f" "$f.browserbud-hidden"
+done
+
+# Kill any previous tmux session
+tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+
+# Start Claude Code immediately in a tmux session.
+# This way it connects to the MCP server right away, without waiting for a browser.
+tmux new-session -d -s "$TMUX_SESSION" -x 200 -y 50 \
+  "cd $WORK_DIR && \
+   unset TERMINAL_EMULATOR __CFBundleIdentifier && \
+   export ENABLE_IDE_INTEGRATION=true && \
+   export BROWSERBUD_DATA_DIR=$WORK_DIR && \
+   exec claude"
+
+# Restore hidden lock files after Claude Code has had time to scan (5s is plenty
+# since Claude Code is already running, not waiting for a browser connection)
+(sleep 5; for f in "$IDE_DIR"/*.browserbud-hidden; do
+  [ -f "$f" ] && mv "$f" "${f%.browserbud-hidden}" 2>/dev/null
+done) &
+
+# Start ttyd — just attaches to the existing tmux session
+ttyd -W -p "$BROWSERBUD_TTYD_PORT" tmux attach -t "$TMUX_SESSION" 2>&1 &
 TTYD_PID=$!
 
 # Print startup summary
@@ -140,12 +168,16 @@ echo "  If running on a remote machine, use its public URL instead."
 echo "  Press Ctrl+C to stop."
 echo ""
 
-# Trap to clean up both processes
+# Trap to clean up processes, tmux session, and restore hidden lock files
 cleanup() {
   echo "Shutting down..."
   kill $TTYD_PID $PROXY_PID 2>/dev/null
+  tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+  for f in "$IDE_DIR"/*.browserbud-hidden; do
+    [ -f "$f" ] && mv "$f" "${f%.browserbud-hidden}" 2>/dev/null
+  done
 }
 trap cleanup EXIT INT TERM
 
-# Wait for both processes (cleanup runs via EXIT trap)
+# Wait for processes (cleanup runs via EXIT trap)
 wait $TTYD_PID $PROXY_PID
