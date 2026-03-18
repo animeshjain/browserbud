@@ -153,6 +153,20 @@ export default defineContentScript({
           },
           "*",
         );
+      } else if (message.type === "extractComments") {
+        // Forward to MAIN world script via postMessage
+        window.postMessage(
+          {
+            type: "BROWSERBUD_EXTRACT_COMMENTS",
+            videoId: message.videoId,
+            requestId: message.requestId,
+            maxComments: message.maxComments,
+            includeReplies: message.includeReplies,
+            minLikesForReplies: message.minLikesForReplies,
+            minRepliesForReplies: message.minRepliesForReplies,
+          },
+          "*",
+        );
       }
     });
 
@@ -194,6 +208,16 @@ export default defineContentScript({
           success: event.data.success,
           text: event.data.text,
           lang: event.data.lang,
+          meta: event.data.meta,
+          error: event.data.error,
+        });
+      } else if (event.data?.type === "BROWSERBUD_EXTRACT_COMMENTS_RESULT") {
+        browser.runtime.sendMessage({
+          type: "commentsResult",
+          requestId: event.data.requestId,
+          success: event.data.success,
+          comments: event.data.comments,
+          totalCount: event.data.totalCount,
           meta: event.data.meta,
           error: event.data.error,
         });

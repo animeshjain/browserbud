@@ -96,6 +96,8 @@ async function connectExtensionWs() {
         const msg = JSON.parse(event.data);
         if (msg.type === "extract-transcript") {
           await handleExtractTranscriptCommand(msg);
+        } else if (msg.type === "extract-comments") {
+          await handleExtractCommentsCommand(msg);
         }
       } catch (err) {
         console.error("BrowserBud: WebSocket message error", err);
@@ -162,6 +164,57 @@ async function handleExtractTranscriptCommand(msg: {
   }
 }
 
+async function handleExtractCommentsCommand(msg: {
+  type: string;
+  videoId: string;
+  requestId: string;
+  maxComments?: number;
+  includeReplies?: boolean;
+  minLikesForReplies?: number;
+  minRepliesForReplies?: number;
+}) {
+  const { videoId, requestId } = msg;
+
+  const tabs = await browser.tabs.query({ url: "*://*.youtube.com/watch*" });
+  let targetTabId: number | null = null;
+
+  for (const tab of tabs) {
+    if (tab.id != null && tab.url?.includes(`v=${videoId}`)) {
+      targetTabId = tab.id;
+      break;
+    }
+  }
+
+  if (targetTabId == null) {
+    sendToServer({
+      type: "extract-comments-result",
+      requestId,
+      success: false,
+      error: `Video ${videoId} not open in any tab`,
+    });
+    return;
+  }
+
+  try {
+    await browser.tabs.sendMessage(targetTabId, {
+      type: "extractComments",
+      videoId,
+      requestId,
+      maxComments: msg.maxComments,
+      includeReplies: msg.includeReplies,
+      minLikesForReplies: msg.minLikesForReplies,
+      minRepliesForReplies: msg.minRepliesForReplies,
+    });
+  } catch (err) {
+    sendToServer({
+      type: "extract-comments-result",
+      requestId,
+      success: false,
+      error: `Failed to reach content script: ${err}`,
+    });
+  }
+}
+
 function sendToServer(msg: Record<string, any>) {
   if (extensionSocket && extensionSocket.readyState === WebSocket.OPEN) {
     extensionSocket.send(JSON.stringify(msg));
@@ -212,6 +265,17 @@ export default defineBackground(() => {
         success: message.success,
         text: message.text,
         lang: message.lang,
+        meta: message.meta,
+        error: message.error,
+      });
+    } else if (message.type === "commentsResult") {
+      // Forward comment extraction result back to server via WebSocket
+      sendToServer({
+        type: "extract-comments-result",
+        requestId: message.requestId,
+        success: message.success,
+        comments: message.comments,
+        totalCount: message.totalCount,
         meta: message.meta,
         error: message.error,
       });

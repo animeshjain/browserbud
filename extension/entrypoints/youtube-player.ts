@@ -161,10 +161,313 @@ export default defineContentScript({
       return OriginalSend.apply(this, args as any);
     };
 
+    // ─── Comment Extraction via InnerTube API ────────────────────────────
+
+    interface CommentData {
+      id: string;
+      author: string;
+      channelId: string;
+      isVerified: boolean;
+      isCreator: boolean;
+      text: string;
+      publishedTime: string;
+      likes: string;
+      replyCount: string;
+      isHearted: boolean;
+      isPinned: boolean;
+      replies?: CommentData[];
+    }
+
+    async function fetchInnerTube(
+      payload: Record<string, any>,
+    ): Promise<any> {
+      const clientVersion =
+        (window as any).ytcfg?.get?.("INNERTUBE_CLIENT_VERSION") ||
+        "2.20250101.00.00";
+      const apiKey =
+        (window as any).ytcfg?.get?.("INNERTUBE_API_KEY") || "";
+
+      const url = `/youtubei/v1/next${apiKey ? "?key=" + apiKey : ""}`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          context: {
+            client: { clientName: "WEB", clientVersion },
+          },
+          ...payload,
+        }),
+      });
+      if (!resp.ok) throw new Error(`InnerTube ${resp.status}`);
+      return resp.json();
+    }
+
+    function parseCommentsFromMutations(mutations: any[]): CommentData[] {
+      const comments: CommentData[] = [];
+      // Build a set of pinned comment keys from the rendering tree
+      // (we'll enrich this from the thread data later)
+      for (const m of mutations) {
+        const p = m?.payload?.commentEntityPayload;
+        if (!p) continue;
+        comments.push({
+          id: p.properties?.commentId || "",
+          author: p.author?.displayName || "",
+          channelId: p.author?.channelId || "",
+          isVerified: !!p.author?.isVerified,
+          isCreator: !!p.author?.isCreator,
+          text: p.properties?.content?.content || "",
+          publishedTime: p.properties?.publishedTime || "",
+          likes: p.toolbar?.likeCountNotliked || "0",
+          replyCount: p.toolbar?.replyCount || "0",
+          isHearted: !!p.toolbar?.heartActiveTooltip,
+          isPinned: false, // enriched from thread data below
+        });
+      }
+      return comments;
+    }
+
+    function extractThreadData(items: any[]): {
+      pinnedIds: Set<string>;
+      replyTokens: Map<string, string>;
+    } {
+      const pinnedIds = new Set<string>();
+      const replyTokens = new Map<string, string>();
+
+      for (const item of items) {
+        const thread = item?.commentThreadRenderer;
+        if (!thread) continue;
+
+        const vm = thread.commentViewModel?.commentViewModel;
+        const commentId = vm?.commentId || "";
+
+        if (vm?.pinnedText) pinnedIds.add(commentId);
+
+        const replyContents =
+          thread.replies?.commentRepliesRenderer?.contents;
+        if (replyContents) {
+          const contItem = replyContents.find(
+            (c: any) => c.continuationItemRenderer,
+          );
+          const token =
+            contItem?.continuationItemRenderer?.continuationEndpoint
+              ?.continuationCommand?.token;
+          if (token) replyTokens.set(commentId, token);
+        }
+      }
+      return { pinnedIds, replyTokens };
+    }
+
+    async function extractComments(opts: {
+      videoId: string;
+      maxComments: number;
+      includeReplies: boolean;
+      minLikesForReplies: number;
+      minRepliesForReplies: number;
+    }): Promise<{
+      comments: CommentData[];
+      totalCount: string;
+    }> {
+      // Step 1: Get fresh initial data with comments continuation token
+      const initialData = await fetchInnerTube({ videoId: opts.videoId });
+
+      const contents =
+        initialData?.contents?.twoColumnWatchNextResults?.results?.results
+          ?.contents;
+      if (!contents) throw new Error("No contents in /next response");
+
+      let commentsToken: string | null = null;
+      for (const item of contents) {
+        const section = item?.itemSectionRenderer;
+        if (section?.targetId === "comments-section") {
+          commentsToken =
+            section.contents?.[0]?.continuationItemRenderer
+              ?.continuationEndpoint?.continuationCommand?.token || null;
+          break;
+        }
+      }
+      if (!commentsToken) throw new Error("No comments section found");
+
+      // Step 2: Fetch comment pages
+      const allComments: CommentData[] = [];
+      const allReplyTokens = new Map<string, string>();
+      const allPinnedIds = new Set<string>();
+      let totalCount = "";
+      let token: string | null = commentsToken;
+      let pageNum = 0;
+
+      while (token && allComments.length < opts.maxComments) {
+        const page = await fetchInnerTube({ continuation: token });
+        const mutations =
+          page?.frameworkUpdates?.entityBatchUpdate?.mutations || [];
+        const pageComments = parseCommentsFromMutations(mutations);
+
+        // Get thread rendering data (pinned status, reply tokens)
+        const endpoints = page?.onResponseReceivedEndpoints || [];
+        let threadItems: any[] = [];
+        for (const ep of endpoints) {
+          const items =
+            ep.reloadContinuationItemsCommand?.continuationItems ||
+            ep.appendContinuationItemsAction?.continuationItems ||
+            [];
+          threadItems = threadItems.concat(items);
+        }
+
+        const { pinnedIds, replyTokens } = extractThreadData(threadItems);
+        for (const id of pinnedIds) allPinnedIds.add(id);
+        for (const [id, t] of replyTokens) allReplyTokens.set(id, t);
+
+        // Extract total count from header (first page only)
+        if (pageNum === 0) {
+          const header =
+            threadItems.find((i: any) => i.commentsHeaderRenderer)
+              ?.commentsHeaderRenderer;
+          if (header) {
+            totalCount =
+              header.countText?.runs?.map((r: any) => r.text).join("") || "";
+          }
+        }
+
+        allComments.push(...pageComments);
+
+        // Find next page token
+        const nextContItem = threadItems.find(
+          (i: any) => i.continuationItemRenderer,
+        );
+        token =
+          nextContItem?.continuationItemRenderer?.continuationEndpoint
+            ?.continuationCommand?.token || null;
+        pageNum++;
+      }
+
+      // Trim to maxComments
+      if (allComments.length > opts.maxComments) {
+        allComments.length = opts.maxComments;
+      }
+
+      // Enrich pinned status
+      for (const c of allComments) {
+        if (allPinnedIds.has(c.id)) c.isPinned = true;
+      }
+
+      // Step 3: Fetch replies for qualifying comments
+      if (opts.includeReplies) {
+        for (const comment of allComments) {
+          const replyToken = allReplyTokens.get(comment.id);
+          if (!replyToken) continue;
+
+          // Check if this comment qualifies for reply fetching
+          const likeNum = parseMetricString(comment.likes);
+          const replyNum = parseMetricString(comment.replyCount);
+          if (
+            likeNum < opts.minLikesForReplies &&
+            replyNum < opts.minRepliesForReplies
+          ) {
+            continue;
+          }
+
+          try {
+            const replyPage = await fetchInnerTube({
+              continuation: replyToken,
+            });
+            const replyMutations =
+              replyPage?.frameworkUpdates?.entityBatchUpdate?.mutations ||
+              [];
+            comment.replies = parseCommentsFromMutations(replyMutations);
+          } catch (err) {
+            console.warn(
+              `[BrowserBud] Failed to fetch replies for ${comment.id}:`,
+              err,
+            );
+          }
+        }
+      }
+
+      return { comments: allComments, totalCount };
+    }
+
+    function parseMetricString(s: string): number {
+      if (!s || s === "0") return 0;
+      const cleaned = s.replace(/,/g, "").trim();
+      const match = cleaned.match(/^([\d.]+)\s*([KMB])?$/i);
+      if (!match) return 0;
+      const num = parseFloat(match[1]);
+      const suffix = (match[2] || "").toUpperCase();
+      if (suffix === "K") return num * 1000;
+      if (suffix === "M") return num * 1000000;
+      if (suffix === "B") return num * 1000000000;
+      return num;
+    }
+
     // ─── Extraction Trigger ─────────────────────────────────────────────
 
     window.addEventListener("message", (event) => {
       if (event.source !== window) return;
+
+      // ─── Comment Extraction ───────────────────────────────────────────
+      if (event.data?.type === "BROWSERBUD_EXTRACT_COMMENTS") {
+        const {
+          videoId,
+          requestId,
+          maxComments = 40,
+          includeReplies = true,
+          minLikesForReplies = 100,
+          minRepliesForReplies = 5,
+        } = event.data;
+
+        const currentVideoId = getVideoId();
+        if (currentVideoId !== videoId) {
+          window.postMessage(
+            {
+              type: "BROWSERBUD_EXTRACT_COMMENTS_RESULT",
+              requestId,
+              success: false,
+              error: `Wrong video: on ${currentVideoId}, requested ${videoId}`,
+            },
+            "*",
+          );
+          return;
+        }
+
+        extractComments({
+          videoId,
+          maxComments,
+          includeReplies,
+          minLikesForReplies,
+          minRepliesForReplies,
+        })
+          .then((result) => {
+            console.log(
+              `[BrowserBud] Extracted ${result.comments.length} comments for ${videoId}`,
+            );
+            window.postMessage(
+              {
+                type: "BROWSERBUD_EXTRACT_COMMENTS_RESULT",
+                requestId,
+                success: true,
+                comments: result.comments,
+                totalCount: result.totalCount,
+                meta: getVideoMeta(),
+              },
+              "*",
+            );
+          })
+          .catch((err) => {
+            console.error("[BrowserBud] Comment extraction failed:", err);
+            window.postMessage(
+              {
+                type: "BROWSERBUD_EXTRACT_COMMENTS_RESULT",
+                requestId,
+                success: false,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              "*",
+            );
+          });
+
+        return;
+      }
+
+      // ─── Transcript Extraction ────────────────────────────────────────
       if (event.data?.type !== "BROWSERBUD_EXTRACT_TRANSCRIPT") return;
 
       const { videoId, requestId } = event.data;

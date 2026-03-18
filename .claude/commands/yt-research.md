@@ -10,7 +10,18 @@ When the user is on a YouTube page (check `context/current.json` for the current
 ```bash
 npm run --prefix skills/yt-research cli -- transcript "<url-or-video-id>" [--force]
 ```
-Downloads the transcript and caches it to `cache/youtube/{videoId}/`. Uses Supadata with ScrapeCreators fallback.
+Downloads the transcript and caches it to `cache/youtube/{videoId}/`. Uses client-side extraction with Supadata/ScrapeCreators fallback.
+
+### Fetch video comments
+```bash
+npm run --prefix skills/yt-research cli -- comments "<url-or-video-id>" [--max 40] [--min-likes 100] [--min-replies 5] [--no-replies] [--force]
+```
+Fetches comments via the browser extension using YouTube's InnerTube API. Caches to `cache/youtube/{videoId}/comments.md` and `comments.json`. Options:
+- `--max <n>` — max comments to fetch (default: 40, fetches ~20 per page)
+- `--min-likes <n>` — only fetch replies for comments with at least this many likes (default: 100)
+- `--min-replies <n>` — only fetch replies for comments with at least this many replies (default: 5)
+- `--no-replies` — skip fetching replies entirely
+- `--force` — re-fetch even if cached
 
 ### Get video metadata
 ```bash
@@ -34,12 +45,24 @@ npm run --prefix skills/yt-research cli -- list
 3. Read the cached `cache/youtube/{videoId}/transcript.md` — it includes metadata headers and the full transcript text.
 4. Answer the user's question using the transcript content. Ground your answers in actual quotes and language from the transcript.
 
+### When to fetch comments
+
+Use `comments` when the user asks about:
+- What people think, audience reaction, sentiment, reception
+- Popular opinions, controversial takes, discussion
+- Community response, viewer feedback
+- Specific questions about what commenters said
+
+Default behavior: fetch 2 pages (~40 comments), include replies for comments with 100+ likes or 5+ replies. Adjust `--max`, `--min-likes`, `--min-replies` based on the question — e.g., increase `--max` for sentiment analysis, lower `--min-likes` for niche discussions.
+
 ## Caching
 
-Transcripts are cached at `cache/youtube/{videoId}/`. Once fetched, a transcript won't be re-fetched unless `--force` is passed. Each cached video has:
+Transcripts and comments are cached at `cache/youtube/{videoId}/`. Once fetched, they won't be re-fetched unless `--force` is passed. Each cached video may have:
 - `transcript.md` — formatted with metadata header
 - `transcript.txt` — raw text only
 - `meta.json` — video metadata (title, channel, duration, etc.)
+- `comments.md` — formatted comments with metadata
+- `comments.json` — structured comment data (author, text, likes, replies, etc.)
 
 **Note:** The browser extension automatically extracts transcripts client-side when the user navigates to a YouTube video. These are pre-cached via `/api/transcript`, so in most cases the transcript will already be available when you run the CLI. The CLI only needs to fetch from APIs as a fallback.
 

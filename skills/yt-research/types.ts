@@ -22,3 +22,25 @@ export interface CachedVideo {
   cachedAt: string;
   transcriptChars: number;
 }
+
+export interface Comment {
+  id: string;
+  author: string;
+  channelId: string;
+  isVerified: boolean;
+  isCreator: boolean;
+  text: string;
+  publishedTime: string;
+  likes: string;
+  replyCount: string;
+  isHearted: boolean;
+  isPinned: boolean;
+  replies?: Comment[];
+}
+
+export interface CommentsResult {
+  comments: Comment[];
+  totalCount: string;
+  videoId: string;
+  fetchedAt: string;
+}

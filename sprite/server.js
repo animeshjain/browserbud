@@ -305,7 +305,7 @@ extensionWss.on("connection", (ws) => {
     try {
       const msg = JSON.parse(data);
       log.debug({ type: msg.type }, "extension message received");
-      if (msg.type === "extract-transcript-result" && msg.requestId) {
+      if ((msg.type === "extract-transcript-result" || msg.type === "extract-comments-result") && msg.requestId) {
         const pending = pendingRequests.get(msg.requestId);
         if (pending) {
           clearTimeout(pending.timer);
@@ -340,7 +340,7 @@ extensionWss.on("connection", (ws) => {
   ws.on("close", () => clearInterval(pingInterval));
 });
 
-function sendExtensionCommand(command) {
+function sendExtensionCommand(command, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     if (!extensionWs || extensionWs.readyState !== extensionWs.OPEN) {
       reject(new Error("Extension not connected"));
@@ -351,7 +351,7 @@ function sendExtensionCommand(command) {
     const timer = setTimeout(() => {
       pendingRequests.delete(requestId);
       reject(new Error("Timeout waiting for extension response"));
-    }, 15000);
+    }, timeoutMs);
 
     pendingRequests.set(requestId, { resolve, reject, timer });
     extensionWs.send(JSON.stringify({ ...command, requestId }));
@@ -438,6 +438,112 @@ function handleExtractTranscript(req, res) {
       }
     } catch (err) {
       log.error({ err: err.message }, "extract-transcript error");
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    }
+  });
+}
+
+function handleExtractComments(req, res) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
+    return;
+  }
+
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", async () => {
+    try {
+      const { videoId, maxComments, includeReplies, minLikesForReplies, minRepliesForReplies } = JSON.parse(body);
+      if (!videoId) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "videoId is required" }));
+        return;
+      }
+
+      log.info({ videoId, maxComments }, "requesting comments from extension");
+      const result = await sendExtensionCommand({
+        type: "extract-comments",
+        videoId,
+        maxComments,
+        includeReplies,
+        minLikesForReplies,
+        minRepliesForReplies,
+      }, 60000);
+
+      if (result.success) {
+        // Cache the comments
+        const videoDir = path.join(CACHE_DIR, videoId);
+        fs.mkdirSync(videoDir, { recursive: true });
+
+        const commentsData = {
+          comments: result.comments,
+          totalCount: result.totalCount,
+          videoId,
+          fetchedAt: new Date().toISOString(),
+        };
+        fs.writeFileSync(path.join(videoDir, "comments.json"), JSON.stringify(commentsData, null, 2));
+
+        // Build markdown
+        const meta = result.meta || {};
+        const mdLines = [
+          `# Comments: ${meta.title || videoId}`,
+          "",
+          `- **Channel:** ${meta.channel || "Unknown"}`,
+          `- **URL:** ${meta.url || `https://www.youtube.com/watch?v=${videoId}`}`,
+          `- **Total comments:** ${result.totalCount || "unknown"}`,
+          `- **Fetched:** ${result.comments.length} comments`,
+          `- **Cached:** ${new Date().toISOString()}`,
+          "",
+          "---",
+          "",
+        ];
+
+        for (const c of result.comments) {
+          const badges = [];
+          if (c.isPinned) badges.push("📌 Pinned");
+          if (c.isHearted) badges.push("❤️");
+          if (c.isCreator) badges.push("🎬 Creator");
+          if (c.isVerified) badges.push("✓ Verified");
+          const badgeStr = badges.length > 0 ? " " + badges.join(" ") : "";
+
+          mdLines.push(`**${c.author}** · ${c.publishedTime} · 👍 ${c.likes}${c.replyCount && c.replyCount !== "0" ? ` · 💬 ${c.replyCount}` : ""}${badgeStr}`);
+          mdLines.push(c.text);
+
+          if (c.replies && c.replies.length > 0) {
+            mdLines.push("");
+            for (const r of c.replies) {
+              const rBadges = [];
+              if (r.isCreator) rBadges.push("🎬 Creator");
+              if (r.isVerified) rBadges.push("✓ Verified");
+              const rBadgeStr = rBadges.length > 0 ? " " + rBadges.join(" ") : "";
+              mdLines.push(`> **${r.author}** · ${r.publishedTime} · 👍 ${r.likes}${rBadgeStr}`);
+              mdLines.push(`> ${r.text.replace(/\n/g, "\n> ")}`);
+              mdLines.push(">");
+            }
+          }
+
+          mdLines.push("");
+        }
+
+        fs.writeFileSync(path.join(videoDir, "comments.md"), mdLines.join("\n"));
+        log.info({ videoId, count: result.comments.length, total: result.totalCount, title: meta.title }, "comments cached");
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          ok: true,
+          comments: result.comments,
+          totalCount: result.totalCount,
+          meta: result.meta,
+        }));
+      } else {
+        log.warn({ videoId, error: result.error }, "comment extraction failed");
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: result.error || "Extraction failed" }));
+      }
+    } catch (err) {
+      log.error({ err: err.message }, "extract-comments error");
       res.writeHead(502, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: false, error: err.message }));
     }
@@ -651,6 +757,10 @@ const server = http.createServer((req, res) => {
 
   if (req.url === "/api/extract-transcript") {
     return handleExtractTranscript(req, res);
+  }
+
+  if (req.url === "/api/extract-comments") {
+    return handleExtractComments(req, res);
   }
 
   // Serve the bridge script

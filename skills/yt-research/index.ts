@@ -1,9 +1,11 @@
 import { extractVideoId } from "./url_parser.js";
 import { fetchTranscript } from "./transcript.js";
 import { fetchVideoMeta } from "./video_meta.js";
+import { fetchComments } from "./comments.js";
 import { formatTranscriptMarkdown, formatVideoInfo } from "./formatter.js";
 import {
   isTranscriptCached,
+  isCommentsCached,
   saveTranscript,
   listCachedVideos,
   videoDir,
@@ -54,6 +56,44 @@ async function transcriptCommand(
   console.log(`  transcript.md  — formatted with metadata`);
   console.log(`  transcript.txt — raw text`);
   console.log(`  meta.json      — video metadata`);
+}
+
+async function commentsCommand(
+  input: string,
+  force: boolean,
+  maxComments: number,
+  includeReplies: boolean,
+  minLikesForReplies: number,
+  minRepliesForReplies: number,
+): Promise<void> {
+  const videoId = extractVideoId(input);
+  console.log(`Video ID: ${videoId}`);
+
+  if (!force && isCommentsCached(videoId)) {
+    const dir = videoDir(videoId);
+    console.log(`Already cached: ${dir}/comments.md`);
+    console.log(`Use --force to re-fetch.`);
+    return;
+  }
+
+  console.log(
+    `Fetching comments (max ${maxComments}, replies: ${includeReplies})...`,
+  );
+  const result = await fetchComments(videoId, {
+    maxComments,
+    includeReplies,
+    minLikesForReplies,
+    minRepliesForReplies,
+  });
+
+  console.log(
+    `  Got ${result.comments.length} comments (${result.totalCount} total on video)`,
+  );
+
+  const dir = videoDir(videoId);
+  console.log(`\nSaved to: ${dir}/`);
+  console.log(`  comments.md   — formatted for reading`);
+  console.log(`  comments.json — structured data`);
 }
 
 async function infoCommand(input: string): Promise<void> {
@@ -166,6 +206,7 @@ function printUsage(): void {
 
 Commands:
   transcript <url|id>       Fetch and cache a video transcript
+  comments <url|id>         Fetch and cache video comments
   info <url|id>             Show video metadata
   batch <url1> <url2> ...   Fetch multiple transcripts
   list                      List cached videos
@@ -173,12 +214,20 @@ Commands:
 Transcript options:
   --force                   Re-fetch even if cached
 
+Comments options:
+  --force                   Re-fetch even if cached
+  --max <n>                 Max comments to fetch (default: 40)
+  --replies                 Include replies (default: true)
+  --no-replies              Skip reply fetching
+  --min-likes <n>           Min likes for reply fetching (default: 100)
+  --min-replies <n>         Min reply count for reply fetching (default: 5)
+
 Batch options:
   --force                   Re-fetch all, even if cached
 
 Examples:
   npm run --prefix skills/yt-research cli -- transcript "https://youtube.com/watch?v=abc123"
-  npm run --prefix skills/yt-research cli -- transcript abc123
+  npm run --prefix skills/yt-research cli -- comments abc123 --max 60 --min-likes 50
   npm run --prefix skills/yt-research cli -- batch url1 url2 url3
   npm run --prefix skills/yt-research cli -- list
 `);
@@ -204,6 +253,27 @@ if (isMain) {
           process.exit(1);
         }
         await transcriptCommand(url, force);
+        break;
+      }
+
+      case "comments": {
+        const commentsUrl = positional[0];
+        if (!commentsUrl) {
+          console.error("Usage: comments <url|id>");
+          process.exit(1);
+        }
+        const maxComments = parseInt(flags.max || "40", 10);
+        const includeReplies = flags["no-replies"] !== "true";
+        const minLikesForReplies = parseInt(flags["min-likes"] || "100", 10);
+        const minRepliesForReplies = parseInt(flags["min-replies"] || "5", 10);
+        await commentsCommand(
+          commentsUrl,
+          force,
+          maxComments,
+          includeReplies,
+          minLikesForReplies,
+          minRepliesForReplies,
+        );
         break;
       }
 
