@@ -4,13 +4,23 @@ const path = require("path");
 const httpProxy = require("http-proxy");
 const { WebSocketServer } = require("ws");
 const { v4: uuidv4 } = require("uuid");
+const pino = require("pino");
 
 // ─── Logging ────────────────────────────────────────────────────────────────
 
-function log(tag, message) {
-  const time = new Date().toLocaleTimeString("en-US", { hour12: false });
-  console.log(`  ${time}  [${tag}]  ${message}`);
-}
+const log = pino({
+  level: process.env.BROWSERBUD_LOG_LEVEL || "info",
+  transport: {
+    target: "pino/file",
+    options: { destination: 1 }, // stdout
+  },
+  formatters: {
+    level(label) {
+      return { level: label };
+    },
+  },
+  timestamp: pino.stdTimeFunctions.isoTime,
+});
 
 const TTYD_PORT = parseInt(process.env.BROWSERBUD_TTYD_PORT, 10);
 const PROXY_PORT = parseInt(process.env.BROWSERBUD_PORT, 10);
@@ -76,35 +86,38 @@ function startMcpServer() {
   mcpServer.on("upgrade", (req, socket, head) => {
     const token = req.headers["x-claude-code-ide-authorization"];
     if (token !== authToken) {
+      log.debug({ remoteAddr: req.socket.remoteAddress }, "mcp auth rejected");
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;
     }
+    log.debug({ remoteAddr: req.socket.remoteAddress }, "mcp auth ok");
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);
     });
   });
 
   wss.on("connection", (ws) => {
-    log("mcp", "Claude Code connected");
+    log.info("Claude Code connected");
     connectedClients.add(ws);
 
     ws.on("message", (data) => {
       try {
         const msg = JSON.parse(data);
+        log.debug({ method: msg.method, id: msg.id }, "mcp message received");
         handleMcpMessage(ws, msg);
       } catch (err) {
-        log("mcp", `Bad message: ${err.message}`);
+        log.warn({ err: err.message }, "mcp bad message");
       }
     });
 
     ws.on("close", () => {
-      log("mcp", "Claude Code disconnected");
+      log.info("Claude Code disconnected");
       connectedClients.delete(ws);
     });
 
     ws.on("error", (err) => {
-      log("mcp", `WebSocket error: ${err.message}`);
+      log.error({ err: err.message }, "mcp websocket error");
     });
 
     // Ping every 30s
@@ -117,13 +130,21 @@ function startMcpServer() {
   // Listen on random port, localhost only
   mcpServer.listen(0, "127.0.0.1", () => {
     mcpPort = mcpServer.address().port;
-    log("mcp", `IDE integration server on port ${mcpPort}`);
-    // Write port to file so start.sh can pass it as CLAUDE_CODE_SSE_PORT
-    // Note: we intentionally do NOT write a lock file — the ttyd Claude instance
-    // connects via CLAUDE_CODE_SSE_PORT env var. A lock file would cause every
-    // Claude instance on this machine to discover and connect, polluting their
-    // context with browser data.
+    log.info({ port: mcpPort }, "mcp server listening");
     fs.writeFileSync(path.join(IDE_DIR, "browserbud.port"), String(mcpPort));
+
+    // Write a lock file so Claude Code discovers us (same format as VS Code / JetBrains plugins)
+    const lockData = JSON.stringify({
+      workspaceFolders: [DATA_DIR],
+      pid: process.pid,
+      ideName: "BrowserBud",
+      transport: "ws",
+      runningInWindows: false,
+      authToken,
+    });
+    const lockPath = path.join(IDE_DIR, `${mcpPort}.lock`);
+    fs.writeFileSync(lockPath, lockData);
+    log.info({ lockPath }, "lock file written");
   });
 
   return mcpServer;
@@ -157,6 +178,7 @@ function handleMcpMessage(ws, msg) {
     }));
   } else if (id) {
     // Unknown method with id — send empty result
+    log.debug({ method, id }, "mcp unknown method");
     ws.send(JSON.stringify({
       jsonrpc: "2.0",
       id,
@@ -166,12 +188,11 @@ function handleMcpMessage(ws, msg) {
 }
 
 function removeLockFile() {
-  // Clean up any stale lock files from previous runs that used lock file discovery
   if (mcpPort) {
     const lockPath = path.join(IDE_DIR, `${mcpPort}.lock`);
     try {
       fs.unlinkSync(lockPath);
-      log("mcp", `Stale lock file removed: ${lockPath}`);
+      log.debug({ lockPath }, "lock file removed");
     } catch {}
   }
 }
@@ -206,10 +227,11 @@ function broadcastSelection(context) {
     }
   }
   if (displayText) {
-    log("context", displayText);
+    log.info({ clients: connectedClients.size }, displayText);
   } else {
-    log("context", "Cleared (no active page)");
+    log.info({ clients: connectedClients.size }, "context cleared");
   }
+  log.debug({ displayText, filePath }, "broadcast selection_changed");
 }
 
 // ─── Extension WebSocket (bidirectional command channel) ────────────────────
@@ -220,12 +242,13 @@ const pendingRequests = new Map(); // requestId -> { resolve, reject, timer }
 const extensionWss = new WebSocketServer({ noServer: true });
 
 extensionWss.on("connection", (ws) => {
-  log("ext-ws", "Extension connected");
+  log.info("extension connected");
   extensionWs = ws;
 
   ws.on("message", (data) => {
     try {
       const msg = JSON.parse(data);
+      log.debug({ type: msg.type }, "extension message received");
       if (msg.type === "extract-transcript-result" && msg.requestId) {
         const pending = pendingRequests.get(msg.requestId);
         if (pending) {
@@ -235,12 +258,12 @@ extensionWss.on("connection", (ws) => {
         }
       }
     } catch (err) {
-      log("ext-ws", `Bad message: ${err.message}`);
+      log.warn({ err: err.message }, "extension bad message");
     }
   });
 
   ws.on("close", () => {
-    log("ext-ws", "Extension disconnected");
+    log.info("extension disconnected");
     if (extensionWs === ws) extensionWs = null;
     // Reject all pending requests
     for (const [id, pending] of pendingRequests) {
@@ -251,7 +274,7 @@ extensionWss.on("connection", (ws) => {
   });
 
   ws.on("error", (err) => {
-    log("ext-ws", `Error: ${err.message}`);
+    log.error({ err: err.message }, "extension websocket error");
   });
 
   // Ping every 30s
@@ -297,7 +320,7 @@ function handleExtractTranscript(req, res) {
         return;
       }
 
-      log("extract", `Requesting transcript for ${videoId} from extension...`);
+      log.info({ videoId }, "requesting transcript from extension");
       const result = await sendExtensionCommand({
         type: "extract-transcript",
         videoId,
@@ -341,7 +364,7 @@ function handleExtractTranscript(req, res) {
               cachedAt: new Date().toISOString(),
             }, null, 2),
           );
-          log("extract", `Cached "${meta.title || videoId}" (${videoId}, ${result.text.length} chars, via client)`);
+          log.info({ videoId, chars: result.text.length, title: meta.title }, "transcript cached");
         }
 
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -353,12 +376,12 @@ function handleExtractTranscript(req, res) {
           source: "client",
         }));
       } else {
-        log("extract", `Failed for ${videoId}: ${result.error}`);
+        log.warn({ videoId, error: result.error }, "transcript extraction failed");
         res.writeHead(502, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: false, error: result.error || "Extraction failed" }));
       }
     } catch (err) {
-      log("extract", `Error: ${err.message}`);
+      log.error({ err: err.message }, "extract-transcript error");
       res.writeHead(502, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: false, error: err.message }));
     }
@@ -372,8 +395,8 @@ const proxy = httpProxy.createProxyServer({
   ws: true,
 });
 
-proxy.on("error", (err, req, res) => {
-  log("proxy", `Error: ${err.message}`);
+proxy.on("error", (err, _req, res) => {
+  log.debug({ err: err.message }, "proxy error");
   if (res.writeHead) {
     res.writeHead(502, { "Content-Type": "text/plain" });
     res.end("Bad Gateway — ttyd not ready");
@@ -397,6 +420,7 @@ function handleContext(req, res) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
       } catch (err) {
+        log.warn({ err: err.message }, "invalid context JSON");
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Invalid JSON" }));
       }
@@ -436,7 +460,7 @@ function handleTranscript(req, res) {
 
       // Skip if already cached (don't overwrite server-side fetched transcripts)
       if (fs.existsSync(path.join(videoDir, "transcript.md"))) {
-        log("transcript", `Already cached: ${videoId}`);
+        log.debug({ videoId }, "transcript already cached");
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true, videoId, cached: true, existing: true }));
         return;
@@ -489,11 +513,11 @@ function handleTranscript(req, res) {
         ),
       );
 
-      log("transcript", `Cached "${title}" (${videoId}, ${text.length} chars, via ${source || "client"})`);
+      log.info({ videoId, chars: text.length, title, source: source || "client" }, "transcript cached");
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, videoId, cached: true }));
     } catch (err) {
-      log("transcript", `Error: ${err.message}`);
+      log.error({ err: err.message }, "transcript error");
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Invalid request" }));
     }
@@ -532,12 +556,12 @@ function handleFrame(req, res) {
       fs.writeFileSync(path.join(videoDir, filename), base64Data, "base64");
 
       const relativePath = `cache/youtube/${videoId}/${filename}`;
-      log("frame", `Captured ${relativePath}`);
+      log.info({ videoId, relativePath }, "frame captured");
 
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, path: relativePath }));
     } catch (err) {
-      log("frame", `Error: ${err.message}`);
+      log.error({ err: err.message }, "frame error");
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Invalid request" }));
     }
@@ -600,12 +624,12 @@ const server = http.createServer((req, res) => {
         res.end(html);
       });
       ttydRes.on("error", (err) => {
-        log("proxy", `Failed to fetch ttyd HTML: ${err.message}`);
+        log.debug({ err: err.message }, "failed to fetch ttyd HTML");
         res.writeHead(502, { "Content-Type": "text/plain" });
         res.end("Bad Gateway — ttyd not ready");
       });
     }).on("error", (err) => {
-      log("proxy", `Failed to connect to ttyd: ${err.message}`);
+      log.debug({ err: err.message }, "failed to connect to ttyd");
       res.writeHead(502, { "Content-Type": "text/plain" });
       res.end("Bad Gateway — ttyd not ready");
     });
