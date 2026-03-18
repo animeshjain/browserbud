@@ -275,7 +275,7 @@ export default defineBackground(() => {
       if (tab.id == null) return;
       await chrome.sidePanel.setOptions({
         tabId: tab.id,
-        path: "sidepanel/index.html",
+        path: "sidepanel.html",
         enabled: true,
       });
       chrome.sidePanel.open({ tabId: tab.id });
