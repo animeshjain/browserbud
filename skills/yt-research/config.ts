@@ -4,9 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Load root .env first (has all config), then skill .env as fallback for standalone dev
 config({ path: join(__dirname, "..", "..", ".env") });
-config({ path: join(__dirname, ".env") });
 
 export const SUPADATA_API_KEY = process.env.SUPADATA_API_KEY || "";
 export const SCRAPECREATORS_API_KEY = process.env.SCRAPECREATORS_API_KEY || "";
