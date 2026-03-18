@@ -101,6 +101,11 @@ tmux new-session -d -s "$TMUX_SESSION" -x 200 -y 50 \
    export BROWSERBUD_DATA_DIR=$WORK_DIR && \
    exec claude --ide"
 
+# Use the most recently active client's size instead of the smallest.
+# Without this, multiple ttyd connections (e.g. two browser windows) cause
+# tmux to shrink to the smallest client and fill the rest with dots.
+tmux set-option -t "$TMUX_SESSION" -g window-size latest
+
 # Hidden lock files are restored by server.js when Claude Code connects,
 # and by the cleanup trap as a safety net.
 

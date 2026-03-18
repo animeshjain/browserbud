@@ -93,9 +93,18 @@ function buildSelectionNotification(context) {
   const site = context.site || "";
   const title = context.title || "";
   const url = context.url || "";
+  const selection = context.selection;
 
-  // Map browser context to selection_changed format
-  const displayText = site && title ? `${site}: ${title}` : "";
+  let displayText = site && title ? `${site}: ${title}` : "";
+  if (selection && selection.lineCount > 0) {
+    displayText += ` (${selection.lineCount} line${selection.lineCount > 1 ? "s" : ""} selected)`;
+  }
+
+  // Include selected text in the notification so Claude has direct access
+  const textContent = selection?.text
+    ? `${displayText}\n\n--- Selected Text ---\n${selection.text}`
+    : displayText;
+
   const filePath = url || "";
 
   return {
@@ -103,13 +112,13 @@ function buildSelectionNotification(context) {
       jsonrpc: "2.0",
       method: "selection_changed",
       params: {
-        text: displayText,
+        text: textContent,
         filePath,
         fileUrl: filePath,
         selection: {
           start: { line: 0, character: 0 },
-          end: { line: 0, character: 0 },
-          isEmpty: true,
+          end: { line: selection?.lineCount || 0, character: 0 },
+          isEmpty: !selection?.text,
         },
       },
     }),
@@ -305,7 +314,7 @@ extensionWss.on("connection", (ws) => {
     try {
       const msg = JSON.parse(data);
       log.debug({ type: msg.type }, "extension message received");
-      if ((msg.type === "extract-transcript-result" || msg.type === "extract-comments-result" || msg.type === "player-state-result") && msg.requestId) {
+      if ((msg.type === "extract-transcript-result" || msg.type === "extract-comments-result" || msg.type === "player-state-result" || msg.type === "page-content-result") && msg.requestId) {
         const pending = pendingRequests.get(msg.requestId);
         if (pending) {
           clearTimeout(pending.timer);
@@ -548,6 +557,50 @@ function handleExtractComments(req, res) {
       }
     } catch (err) {
       log.error({ err: err.message }, "extract-comments error");
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    }
+  });
+}
+
+function handleExtractPageContent(req, res) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
+    return;
+  }
+
+  // No body needed — extracts from the active tab
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", async () => {
+    try {
+      log.info("requesting page content from extension");
+      const result = await sendExtensionCommand({
+        type: "get-page-content",
+      }, 15000);
+
+      if (result.success) {
+        // Save to context directory
+        const contentPath = path.join(CONTEXT_DIR, "page-content.txt");
+        fs.mkdirSync(CONTEXT_DIR, { recursive: true });
+        fs.writeFileSync(contentPath, result.content);
+        log.info({ chars: result.content.length, title: result.title }, "page content extracted");
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          ok: true,
+          content: result.content,
+          title: result.title,
+          url: result.url,
+        }));
+      } else {
+        log.warn({ error: result.error }, "page content extraction failed");
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: result.error || "Extraction failed" }));
+      }
+    } catch (err) {
+      log.error({ err: err.message }, "extract-page-content error");
       res.writeHead(502, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: false, error: err.message }));
     }
@@ -823,6 +876,10 @@ const server = http.createServer((req, res) => {
 
   if (req.url === "/api/player-state") {
     return handleGetPlayerState(req, res);
+  }
+
+  if (req.url === "/api/extract-page-content") {
+    return handleExtractPageContent(req, res);
   }
 
   // Serve the bridge script

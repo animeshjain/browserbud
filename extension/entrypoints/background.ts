@@ -100,6 +100,8 @@ async function connectExtensionWs() {
           await handleExtractCommentsCommand(msg);
         } else if (msg.type === "get-player-state") {
           await handleGetPlayerStateCommand(msg);
+        } else if (msg.type === "get-page-content") {
+          await handleGetPageContentCommand(msg);
         }
       } catch (err) {
         console.error("BrowserBud: WebSocket message error", err);
@@ -259,6 +261,55 @@ async function handleGetPlayerStateCommand(msg: {
   }
 }
 
+async function handleGetPageContentCommand(msg: {
+  type: string;
+  requestId: string;
+}) {
+  const { requestId } = msg;
+
+  try {
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) {
+      sendToServer({
+        type: "page-content-result",
+        requestId,
+        success: false,
+        error: "No active tab found",
+      });
+      return;
+    }
+
+    const result = await browser.tabs.sendMessage(tab.id, {
+      type: "getPageContent",
+    });
+
+    if (result) {
+      sendToServer({
+        type: "page-content-result",
+        requestId,
+        success: true,
+        content: result.content,
+        title: result.title,
+        url: result.url,
+      });
+    } else {
+      sendToServer({
+        type: "page-content-result",
+        requestId,
+        success: false,
+        error: "No response from content script",
+      });
+    }
+  } catch (err) {
+    sendToServer({
+      type: "page-content-result",
+      requestId,
+      success: false,
+      error: `Failed to reach content script: ${err}`,
+    });
+  }
+}
+
 function sendToServer(msg: Record<string, any>) {
   if (extensionSocket && extensionSocket.readyState === WebSocket.OPEN) {
     extensionSocket.send(JSON.stringify(msg));
@@ -267,19 +318,9 @@ function sendToServer(msg: Record<string, any>) {
 
 export default defineBackground(() => {
   if (isChrome) {
-    // Chrome: per-tab side panel — disabled globally, enabled per tab on click
-    chrome.sidePanel.setOptions({ enabled: false });
+    // Chrome: clicking the action icon toggles the side panel per-tab.
+    // Chrome's sidePanel API already handles per-tab visibility natively.
     chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-
-    chrome.action.onClicked.addListener(async (tab) => {
-      if (tab.id == null) return;
-      await chrome.sidePanel.setOptions({
-        tabId: tab.id,
-        path: "sidepanel.html",
-        enabled: true,
-      });
-      chrome.sidePanel.open({ tabId: tab.id });
-    });
   } else {
     // Firefox MV2: browserAction (not action) + sidebarAction
     browser.browserAction.onClicked.addListener(() => {
@@ -333,9 +374,8 @@ export default defineBackground(() => {
     }
   });
 
-  // When the user switches tabs, ask the content script for context
-  // or clear context if the tab has no content script
-  browser.tabs.onActivated.addListener(async ({ tabId }) => {
+  // Shared helper: query the active tab's content script for context
+  async function refreshContextForTab(tabId: number) {
     try {
       const response = await browser.tabs.sendMessage(tabId, {
         type: "getContext",
@@ -346,6 +386,21 @@ export default defineBackground(() => {
     } catch {
       // No content script on this tab — clear context
       sendContext({});
+    }
+  }
+
+  // When the user switches tabs, update context
+  browser.tabs.onActivated.addListener(async ({ tabId }) => {
+    refreshContextForTab(tabId);
+  });
+
+  // When a browser window gains focus, update context for its active tab
+  // (handles switching between browser windows or returning from another app)
+  browser.windows.onFocusChanged.addListener(async (windowId) => {
+    if (windowId === browser.windows.WINDOW_ID_NONE) return;
+    const [tab] = await browser.tabs.query({ active: true, windowId });
+    if (tab?.id) {
+      refreshContextForTab(tab.id);
     }
   });
 
