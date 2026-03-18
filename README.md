@@ -45,6 +45,7 @@ and the browser.
 
 - [Node.js](https://nodejs.org/) v20+
 - [ttyd](https://github.com/tsl0922/ttyd#installation)
+- [tmux](https://github.com/tmux/tmux#installation)
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/overview)
 - Chrome or Firefox
 
