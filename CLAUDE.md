@@ -34,7 +34,7 @@ BrowserBud is a browser extension that gives you a contextual AI terminal when b
 │  Local Server                                             │
 │                                                           │
 │  server.js (single Node process)                          │
-│  ├── HTTP proxy (:8080) ──────────► ttyd (:7681)          │
+│  ├── HTTP proxy (:8989) ──────────► ttyd (:7682)          │
 │  │   ├── /api/context endpoint                            │
 │  │   │    writes context.json                             │
 │  │   │    broadcasts selection_changed ──┐                │
@@ -51,7 +51,7 @@ BrowserBud is a browser extension that gives you a contextual AI terminal when b
 
 `server.js` runs a single Node.js process with two servers:
 
-1. **HTTP Proxy** (port 8080) — the entry point for the browser extension:
+1. **HTTP Proxy** (port 8989, configurable via `BROWSERBUD_PORT`) — the entry point for the browser extension:
    - `POST /api/context` — receives browser context from the extension, writes to `~/browse/context/current.json`, and broadcasts to Claude Code via MCP
    - `GET /api/context` — reads current context
    - `GET /` — fetches ttyd's root HTML and injects the terminal bridge script (`browserbud-bridge.js`) before serving
@@ -65,7 +65,7 @@ BrowserBud is a browser extension that gives you a contextual AI terminal when b
    - Broadcasts `selection_changed` notifications when browser context changes
    - This is the same protocol used by the VS Code and JetBrains plugins
 
-3. **ttyd** (port 7681, internal only) — serves Claude Code in a web terminal
+3. **ttyd** (port 7682, configurable via `BROWSERBUD_TTYD_PORT`, internal only) — serves Claude Code in a web terminal
 
 4. **Terminal Bridge** — injected into the ttyd page by the proxy:
    - Monkey-patches `WebSocket` to capture ttyd's connection
@@ -175,9 +175,9 @@ browserbud/                   # Code repo (development only)
 ## Server Details
 
 - **Runtime**: Node.js (local machine)
-- **HTTP proxy port**: 8080
-- **ttyd port**: 7681 (internal, proxied through 8080)
-- **Server URL**: Configurable in the extension (defaults to `http://localhost:8080`)
+- **HTTP proxy port**: 8989 (configurable via `BROWSERBUD_PORT` env var)
+- **ttyd port**: 7682 (configurable via `BROWSERBUD_TTYD_PORT`, internal, proxied through the server port)
+- **Server URL**: Configurable in the extension (defaults to `http://localhost:8989`)
 
 ## Development Workflow
 
@@ -200,14 +200,14 @@ node sprite/server.js &
 # Wait for MCP port, then:
 MCP_PORT=$(cat ~/.claude/ide/browserbud.port)
 BROWSERBUD_DATA_DIR=$HOME/browse CLAUDE_CODE_SSE_PORT=$MCP_PORT ENABLE_IDE_INTEGRATION=true \
-  ttyd -W -p 7681 bash -c "cd ~/browse && exec claude --dangerously-skip-permissions"
+  ttyd -W -p 7682 bash -c "cd ~/browse && exec claude --dangerously-skip-permissions"
 ```
 
 ### Debugging
 
 - **Server logs**: Check stdout of `server.js` — logs all MCP connections, disconnections, and broadcasts
 - **Extension logs**: Chrome DevTools → background service worker console, or the YouTube tab console
-- **Test context API**: `curl -X POST http://localhost:8080/api/context -H "Content-Type: application/json" -d '{"site":"youtube","title":"Test"}'`
+- **Test context API**: `curl -X POST http://localhost:8989/api/context -H "Content-Type: application/json" -d '{"site":"youtube","title":"Test"}'`
 
 ## Skills
 

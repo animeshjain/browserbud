@@ -90,8 +90,12 @@ After completing a significant task (fetching a transcript, writing a summary, a
 - Do not ask the user to provide transcripts or URLs — read the context and fetch data yourself.
 HEREDOC
 
-# Export data dir for server.js and skills
+# Export config for server.js and skills
 export BROWSERBUD_DATA_DIR="$WORK_DIR"
+BROWSERBUD_PORT="${BROWSERBUD_PORT:-8989}"
+BROWSERBUD_TTYD_PORT="${BROWSERBUD_TTYD_PORT:-7682}"
+export BROWSERBUD_PORT
+export BROWSERBUD_TTYD_PORT
 
 # Start proxy server (logs flow to stdout)
 node "$SCRIPT_DIR/server.js" 2>&1 &
@@ -111,7 +115,7 @@ else
 fi
 
 # Start ttyd (suppress its verbose logs)
-ttyd -W -p 7681 bash -c "
+ttyd -W -p "$BROWSERBUD_TTYD_PORT" bash -c "
   cd $WORK_DIR
   export CLAUDE_CODE_SSE_PORT=$MCP_PORT
   export ENABLE_IDE_INTEGRATION=true
@@ -125,12 +129,12 @@ echo ""
 echo "  BrowserBud is running"
 echo ""
 echo "  Data directory:  $WORK_DIR"
-echo "  Server:          http://localhost:8080"
+echo "  Server:          http://localhost:$BROWSERBUD_PORT"
 echo ""
 echo "  Open the BrowserBud extension in Chrome and enter"
 echo "  this URL when prompted:"
 echo ""
-echo "    http://localhost:8080"
+echo "    http://localhost:$BROWSERBUD_PORT"
 echo ""
 echo "  If running on a remote machine, use its public URL instead."
 echo "  Press Ctrl+C to stop."

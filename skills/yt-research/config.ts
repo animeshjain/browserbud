@@ -20,5 +20,4 @@ export const REQUEST_TIMEOUT_MS = 65_000;
 export const MIN_WPM = 30;
 
 // Server URL for client-side transcript extraction via the browser extension
-export const BROWSERBUD_SERVER_URL =
-  process.env.BROWSERBUD_SERVER_URL || "http://localhost:8080";
+export const BROWSERBUD_SERVER_URL = `http://localhost:${process.env.BROWSERBUD_PORT}`;

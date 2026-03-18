@@ -1,7 +1,7 @@
 import { storage } from "wxt/utils/storage";
 
 const SERVER_URL_KEY = "local:serverUrl";
-const DEFAULT_SERVER_URL = "http://localhost:8080";
+const DEFAULT_SERVER_URL = "http://localhost:8989";
 
 const isChrome = !!globalThis.chrome?.sidePanel;
 

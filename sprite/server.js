@@ -12,8 +12,8 @@ function log(tag, message) {
   console.log(`  ${time}  [${tag}]  ${message}`);
 }
 
-const TTYD_PORT = 7681;
-const PROXY_PORT = 8080;
+const TTYD_PORT = parseInt(process.env.BROWSERBUD_TTYD_PORT, 10);
+const PROXY_PORT = parseInt(process.env.BROWSERBUD_PORT, 10);
 const DATA_DIR = process.env.BROWSERBUD_DATA_DIR || path.join(process.env.HOME, "browse");
 const CONTEXT_DIR = path.join(DATA_DIR, "context");
 const CONTEXT_FILE = path.join(CONTEXT_DIR, "current.json");

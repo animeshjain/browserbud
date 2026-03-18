@@ -59,7 +59,7 @@ yt-research CLI receives { ok: true, text, lang, meta, source: "client" }
 
 Before this feature, communication was one-way: extension → server. The server had no way to ask the extension to do something.
 
-The `/ws/extension` WebSocket (on port 8080, same HTTP server as the proxy) adds a reverse channel:
+The `/ws/extension` WebSocket (on port 8989, same HTTP server as the proxy) adds a reverse channel:
 
 - **background.ts** connects on startup, reconnects every 3s on disconnect
 - **server.js** tracks the single connected extension WebSocket and a `pendingRequests` map (requestId → {resolve, reject, timer})
@@ -110,7 +110,7 @@ This is why the XHR interception approach works but direct fetch/API calls don't
 node sprite/server.js
 
 # Test extraction directly (user must be on a YouTube video page)
-curl -X POST http://localhost:8080/api/extract-transcript \
+curl -X POST http://localhost:8989/api/extract-transcript \
   -H "Content-Type: application/json" \
   -d '{"videoId":"BzKubuqm1lQ"}'
 

@@ -1,7 +1,7 @@
 import { storage } from "wxt/utils/storage";
 
 const SERVER_URL_KEY = "local:serverUrl";
-const DEFAULT_URL = "http://localhost:8080";
+const DEFAULT_URL = "http://localhost:8989";
 
 const terminalFrame = document.getElementById("terminal-frame") as HTMLIFrameElement;
 const setupScreen = document.getElementById("setup-screen") as HTMLDivElement;
