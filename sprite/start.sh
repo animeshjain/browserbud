@@ -153,22 +153,6 @@ tmux new-session -d -s "$TMUX_SESSION" -x 200 -y 50 \
 ttyd -W -p "$BROWSERBUD_TTYD_PORT" tmux attach -t "$TMUX_SESSION" 2>&1 &
 TTYD_PID=$!
 
-# Print startup summary
-echo ""
-echo "  BrowserBud is running"
-echo ""
-echo "  Data directory:  $WORK_DIR"
-echo "  Server:          http://localhost:$BROWSERBUD_PORT"
-echo ""
-echo "  Open the BrowserBud extension in Chrome and enter"
-echo "  this URL when prompted:"
-echo ""
-echo "    http://localhost:$BROWSERBUD_PORT"
-echo ""
-echo "  If running on a remote machine, use its public URL instead."
-echo "  Press Ctrl+C to stop."
-echo ""
-
 # Trap to clean up processes, tmux session, and restore any hidden lock files
 cleanup() {
   echo "Shutting down..."

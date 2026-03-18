@@ -251,6 +251,7 @@ function handleMcpMessage(ws, msg) {
       result: { tools: [] },
     }));
     maybeSendCurrentContext(ws);
+    bannerReady("claude");
   } else if (id) {
     // Unknown method with id — send empty result
     log.debug({ method, id }, "mcp unknown method");
@@ -722,7 +723,53 @@ const mcpServer = startMcpServer();
 
 server.listen(PROXY_PORT, () => {
   log.info({ proxyPort: PROXY_PORT, ttydPort: TTYD_PORT, ms: Date.now() - startTime }, "server ready — all services listening");
+  bannerReady("proxy");
 });
+
+// Banner prints only after both proxy and Claude Code are ready
+const bannerGates = new Set(["proxy", "claude"]);
+const bannerDone = new Set();
+let bannerPrinted = false;
+
+function bannerReady(gate) {
+  bannerDone.add(gate);
+  if (bannerPrinted) return;
+  for (const g of bannerGates) {
+    if (!bannerDone.has(g)) return;
+  }
+  bannerPrinted = true;
+  printBanner();
+}
+
+// Safety net: print banner after 30s even if Claude Code never connects
+setTimeout(() => {
+  if (!bannerPrinted) {
+    log.warn("timed out waiting for all services — printing banner anyway");
+    bannerPrinted = true;
+    printBanner();
+  }
+}, 30000);
+
+function printBanner() {
+  const lines = [
+    "",
+    "  BrowserBud is running",
+    "",
+    `  Data directory:  ${DATA_DIR}`,
+    `  Server:          http://localhost:${PROXY_PORT}`,
+    "",
+    "  Open the BrowserBud extension in Chrome and enter",
+    "  this URL when prompted:",
+    "",
+    `    http://localhost:${PROXY_PORT}`,
+    "",
+    "  If running on a remote machine, use its public URL instead.",
+    "  Press Ctrl+C to stop.",
+    "",
+  ];
+  // Write directly to stdout to bypass pino formatting
+  process.stdout.write(lines.join("\n") + "\n");
+}
 
 function cleanup() {
   removeLockFile();
