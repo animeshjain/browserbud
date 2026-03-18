@@ -1,6 +1,7 @@
 import { defineConfig } from "wxt";
 
 export default defineConfig({
+  outDir: "dist",
   manifest: ({ browser }) => ({
     name: "BrowserBud",
     description: "AI terminal in your browser via Claude Code",

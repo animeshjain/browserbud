@@ -72,12 +72,12 @@ cp .env.example .env
 
 1. `chrome://extensions`
 2. Enable "Developer mode"
-3. "Load unpacked" -> select `extension/.output/chrome-mv3/`
+3. "Load unpacked" -> select `extension/dist/chrome-mv3/`
 
 **Firefox:**
 
 1. `about:debugging#/runtime/this-firefox`
-2. "Load Temporary Add-on" -> select any file in `extension/.output/firefox-mv2/`
+2. "Load Temporary Add-on" -> select `extension/dist/firefox-mv2/manifest.json`
 
 ### Start the server
 

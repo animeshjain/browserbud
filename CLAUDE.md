@@ -183,7 +183,7 @@ browserbud/                   # Code repo (development only)
 
 1. **Server changes**: Edit `sprite/server.js`, restart with `start.sh`
 2. **Extension changes**: `cd extension && npm install && npm run build`
-3. **Load in Chrome**: `chrome://extensions` → Developer Mode → Load unpacked → `extension/.output/chrome-mv3/`
+3. **Load in Chrome**: `chrome://extensions` → Developer Mode → Load unpacked → `extension/dist/chrome-mv3/`
 4. **Test**: Open YouTube, click BrowserBud icon for side panel, check status line updates
 
 ### Restarting the Server

@@ -13,5 +13,8 @@
   },
   "dependencies": {
     "wxt": "^0.20.19"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.38"
   }
 }
