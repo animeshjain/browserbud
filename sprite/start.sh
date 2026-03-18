@@ -15,8 +15,11 @@ fi
 WORK_DIR="${BROWSERBUD_DATA_DIR:-$HOME/browse}"
 WORK_DIR="${WORK_DIR/#\~/$HOME}"
 PORT_FILE="$HOME/.claude/ide/browserbud.port"
-IDE_DIR="$HOME/.claude/ide"
 TMUX_SESSION="browserbud"
+
+# Resolve symlinks so Claude's cwd matches the lock file workspace path.
+mkdir -p "$WORK_DIR"
+WORK_DIR="$(cd "$WORK_DIR" && pwd -P)"
 
 # Create userland directory structure
 mkdir -p "$WORK_DIR/context" "$WORK_DIR/cache/youtube" \
@@ -119,9 +122,10 @@ else
   MCP_PORT=""
 fi
 
-# Hide other IDE lock files so Claude Code only discovers BrowserBud's MCP server.
-# Claude Code scans ~/.claude/ide/*.lock at startup and connects to matching IDEs.
-# Without this, it may connect to IntelliJ instead of BrowserBud.
+# Hide other IDE lock files so Claude Code only discovers BrowserBud.
+# --ide auto-connects when exactly one valid lock file exists.
+# We restore them after 30s — Claude Code only scans at startup.
+IDE_DIR="$HOME/.claude/ide"
 for f in "$IDE_DIR"/*.lock; do
   [ -f "$f" ] || continue
   case "$(basename "$f")" in
@@ -140,13 +144,10 @@ tmux new-session -d -s "$TMUX_SESSION" -x 200 -y 50 \
    unset TERMINAL_EMULATOR __CFBundleIdentifier && \
    export ENABLE_IDE_INTEGRATION=true && \
    export BROWSERBUD_DATA_DIR=$WORK_DIR && \
-   exec claude"
+   exec claude --ide"
 
-# Restore hidden lock files after Claude Code has had time to scan (5s is plenty
-# since Claude Code is already running, not waiting for a browser connection)
-(sleep 5; for f in "$IDE_DIR"/*.browserbud-hidden; do
-  [ -f "$f" ] && mv "$f" "${f%.browserbud-hidden}" 2>/dev/null
-done) &
+# Hidden lock files are restored by server.js when Claude Code connects,
+# and by the cleanup trap as a safety net.
 
 # Start ttyd — just attaches to the existing tmux session
 ttyd -W -p "$BROWSERBUD_TTYD_PORT" tmux attach -t "$TMUX_SESSION" 2>&1 &
@@ -168,7 +169,7 @@ echo "  If running on a remote machine, use its public URL instead."
 echo "  Press Ctrl+C to stop."
 echo ""
 
-# Trap to clean up processes, tmux session, and restore hidden lock files
+# Trap to clean up processes, tmux session, and restore any hidden lock files
 cleanup() {
   echo "Shutting down..."
   kill $TTYD_PID $PROXY_PID 2>/dev/null

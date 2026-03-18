@@ -78,9 +78,17 @@ async function connectExtensionWs() {
   try {
     const ws = new WebSocket(wsUrl);
 
-    ws.addEventListener("open", () => {
+    ws.addEventListener("open", async () => {
       console.log("BrowserBud: WebSocket connected to server");
       extensionSocket = ws;
+      // Send current tab's context so the server has it immediately
+      try {
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        if (tab?.id) {
+          const ctx = await browser.tabs.sendMessage(tab.id, { type: "getContext" });
+          if (ctx) sendContext(ctx);
+        }
+      } catch {}
     });
 
     ws.addEventListener("message", async (event) => {

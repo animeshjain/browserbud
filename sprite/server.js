@@ -22,6 +22,7 @@ const log = pino({
   timestamp: pino.stdTimeFunctions.isoTime,
 });
 
+const startTime = Date.now();
 const TTYD_PORT = parseInt(process.env.BROWSERBUD_TTYD_PORT, 10);
 const PROXY_PORT = parseInt(process.env.BROWSERBUD_PORT, 10);
 const DATA_DIR = process.env.BROWSERBUD_DATA_DIR || path.join(process.env.HOME, "browse");
@@ -76,6 +77,77 @@ const IDE_DIR = path.join(process.env.HOME, ".claude", "ide");
 const authToken = uuidv4();
 let mcpPort = null;
 const connectedClients = new Set();
+const readyClients = new Set();
+
+function loadCurrentContext() {
+  try {
+    return JSON.parse(fs.readFileSync(CONTEXT_FILE, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+let lastContext = loadCurrentContext();
+
+function buildSelectionNotification(context) {
+  const site = context.site || "";
+  const title = context.title || "";
+  const url = context.url || "";
+
+  // Map browser context to selection_changed format
+  const displayText = site && title ? `${site}: ${title}` : "";
+  const filePath = url || "";
+
+  return {
+    notification: JSON.stringify({
+      jsonrpc: "2.0",
+      method: "selection_changed",
+      params: {
+        text: displayText,
+        filePath,
+        fileUrl: filePath,
+        selection: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+          isEmpty: true,
+        },
+      },
+    }),
+    displayText,
+    filePath,
+  };
+}
+
+function sendSelection(ws, context) {
+  if (ws.readyState !== ws.OPEN) return;
+  const { notification } = buildSelectionNotification(context);
+  ws.send(notification);
+}
+
+function maybeSendCurrentContext(ws) {
+  if (!connectedClients.has(ws) || readyClients.has(ws)) return;
+  readyClients.add(ws);
+  // Delay slightly so Claude Code finishes processing the tools/list response
+  // before we push a selection_changed notification
+  const ctx = lastContext;
+  const displayText = (ctx.site && ctx.title) ? `${ctx.site}: ${ctx.title}` : "(empty)";
+  log.info({ displayText }, "replaying context to new client in 500ms");
+  setTimeout(() => sendSelection(ws, ctx), 500);
+}
+
+function restoreHiddenLockFiles() {
+  try {
+    const files = fs.readdirSync(IDE_DIR).filter(f => f.endsWith(".browserbud-hidden"));
+    for (const f of files) {
+      const hidden = path.join(IDE_DIR, f);
+      const original = path.join(IDE_DIR, f.replace(".browserbud-hidden", ""));
+      fs.renameSync(hidden, original);
+      log.info({ file: f }, "restored hidden lock file");
+    }
+  } catch (err) {
+    log.debug({ err: err.message }, "no hidden lock files to restore");
+  }
+}
 
 function startMcpServer() {
   fs.mkdirSync(IDE_DIR, { recursive: true });
@@ -100,6 +172,7 @@ function startMcpServer() {
   wss.on("connection", (ws) => {
     log.info("Claude Code connected");
     connectedClients.add(ws);
+    restoreHiddenLockFiles();
 
     ws.on("message", (data) => {
       try {
@@ -114,6 +187,7 @@ function startMcpServer() {
     ws.on("close", () => {
       log.info("Claude Code disconnected");
       connectedClients.delete(ws);
+      readyClients.delete(ws);
     });
 
     ws.on("error", (err) => {
@@ -176,6 +250,7 @@ function handleMcpMessage(ws, msg) {
       id,
       result: { tools: [] },
     }));
+    maybeSendCurrentContext(ws);
   } else if (id) {
     // Unknown method with id — send empty result
     log.debug({ method, id }, "mcp unknown method");
@@ -198,38 +273,18 @@ function removeLockFile() {
 }
 
 function broadcastSelection(context) {
-  const site = context.site || "";
-  const title = context.title || "";
-  const url = context.url || "";
+  lastContext = context;
+  const { notification, displayText, filePath } = buildSelectionNotification(context);
 
-  // Map browser context to selection_changed format
-  const displayText = site && title ? `${site}: ${title}` : "";
-  const filePath = url || "";
-
-  const notification = JSON.stringify({
-    jsonrpc: "2.0",
-    method: "selection_changed",
-    params: {
-      text: displayText,
-      filePath,
-      fileUrl: filePath,
-      selection: {
-        start: { line: 0, character: 0 },
-        end: { line: 0, character: 0 },
-        isEmpty: true,
-      },
-    },
-  });
-
-  for (const ws of connectedClients) {
+  for (const ws of readyClients) {
     if (ws.readyState === ws.OPEN) {
       ws.send(notification);
     }
   }
   if (displayText) {
-    log.info({ clients: connectedClients.size }, displayText);
+    log.info({ clients: readyClients.size }, displayText);
   } else {
-    log.info({ clients: connectedClients.size }, "context cleared");
+    log.info({ clients: readyClients.size }, "context cleared");
   }
   log.debug({ displayText, filePath }, "broadcast selection_changed");
 }
@@ -413,6 +468,7 @@ function handleContext(req, res) {
         context.timestamp = new Date().toISOString();
         fs.mkdirSync(CONTEXT_DIR, { recursive: true });
         fs.writeFileSync(CONTEXT_FILE, JSON.stringify(context, null, 2));
+        lastContext = context;
 
         // Push to Claude Code via MCP
         broadcastSelection(context);
@@ -569,6 +625,7 @@ function handleFrame(req, res) {
 }
 
 const server = http.createServer((req, res) => {
+  const reqStart = Date.now();
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -602,11 +659,13 @@ const server = http.createServer((req, res) => {
       "Cache-Control": "no-cache",
     });
     res.end(BRIDGE_SCRIPT);
+    log.info({ url: req.url, ms: Date.now() - reqStart }, "http request");
     return;
   }
 
   // Inject bridge script into ttyd's root HTML page
   if (req.url === "/" && req.method === "GET") {
+    log.info("fetching ttyd HTML for bridge injection");
     http.get(`http://localhost:${TTYD_PORT}/`, (ttydRes) => {
       const chunks = [];
       ttydRes.on("data", (chunk) => chunks.push(chunk));
@@ -622,29 +681,37 @@ const server = http.createServer((req, res) => {
           "Access-Control-Allow-Origin": "*",
         });
         res.end(html);
+        log.info({ url: "/", ms: Date.now() - reqStart }, "served ttyd HTML with bridge");
       });
       ttydRes.on("error", (err) => {
-        log.debug({ err: err.message }, "failed to fetch ttyd HTML");
+        log.warn({ err: err.message, ms: Date.now() - reqStart }, "failed to fetch ttyd HTML");
         res.writeHead(502, { "Content-Type": "text/plain" });
         res.end("Bad Gateway — ttyd not ready");
       });
     }).on("error", (err) => {
-      log.debug({ err: err.message }, "failed to connect to ttyd");
+      log.warn({ err: err.message, ms: Date.now() - reqStart }, "failed to connect to ttyd");
       res.writeHead(502, { "Content-Type": "text/plain" });
       res.end("Bad Gateway — ttyd not ready");
     });
     return;
   }
 
+  // Proxy to ttyd — log with duration
+  log.info({ method: req.method, url: req.url }, "proxying to ttyd");
+  res.on("finish", () => {
+    log.info({ method: req.method, url: req.url, status: res.statusCode, ms: Date.now() - reqStart }, "proxy response");
+  });
   proxy.web(req, res);
 });
 
 server.on("upgrade", (req, socket, head) => {
   if (req.url === "/ws/extension") {
+    log.info("extension WebSocket upgrade");
     extensionWss.handleUpgrade(req, socket, head, (ws) => {
       extensionWss.emit("connection", ws, req);
     });
   } else {
+    log.info({ url: req.url }, "ttyd WebSocket upgrade");
     proxy.ws(req, socket, head);
   }
 });
@@ -653,7 +720,9 @@ server.on("upgrade", (req, socket, head) => {
 
 const mcpServer = startMcpServer();
 
-server.listen(PROXY_PORT);
+server.listen(PROXY_PORT, () => {
+  log.info({ proxyPort: PROXY_PORT, ttydPort: TTYD_PORT, ms: Date.now() - startTime }, "server ready — all services listening");
+});
 
 function cleanup() {
   removeLockFile();
