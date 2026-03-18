@@ -88,8 +88,10 @@ async function fetchFromClient(videoId: string): Promise<TranscriptResult> {
     throw new Error(data.error || "Client extraction returned not-ok");
   }
 
+  const text = data.text || "";
   return {
-    text: data.text || "",
+    text,
+    timedText: text, // Client extraction already produces [MM:SS] format
     lang: data.lang || null,
     source: "client",
   };
@@ -107,14 +109,14 @@ async function fetchFromSupadata(videoId: string): Promise<TranscriptResult> {
   const result = await withTimeout(
     client.transcript({
       url: `https://www.youtube.com/watch?v=${videoId}`,
-      text: true,
+      text: false, // Get segments with timestamps
     }),
     REQUEST_TIMEOUT_MS,
     `Supadata request timed out after ${REQUEST_TIMEOUT_MS / 1000}s for ${videoId}`,
   );
 
   // Handle async job polling (videos >20 min trigger async generation)
-  let transcript: { content: string | Array<{ text: string }> };
+  let transcript: { content: string | Array<{ text: string; startMs?: number }> };
 
   if ("jobId" in result) {
     const jobId = (result as { jobId: string }).jobId;
@@ -142,12 +144,28 @@ async function fetchFromSupadata(videoId: string): Promise<TranscriptResult> {
     transcript = result;
   }
 
-  const text =
-    typeof transcript.content === "string"
-      ? transcript.content
-      : transcript.content.map((c) => c.text).join(" ").trim();
+  let text: string;
+  let timedText: string | null = null;
 
-  return { text, lang: null, source: "supadata" };
+  if (typeof transcript.content === "string") {
+    text = transcript.content;
+  } else {
+    text = transcript.content.map((c) => c.text).join(" ").trim();
+    // Build timestamped version if segments have startMs
+    const hasTimestamps = transcript.content.some((c) => c.startMs != null);
+    if (hasTimestamps) {
+      timedText = transcript.content
+        .map((c) => {
+          const totalSec = Math.floor((c.startMs || 0) / 1000);
+          const mm = String(Math.floor(totalSec / 60)).padStart(2, "0");
+          const ss = String(totalSec % 60).padStart(2, "0");
+          return `[${mm}:${ss}] ${c.text}`;
+        })
+        .join("\n");
+    }
+  }
+
+  return { text, timedText, lang: null, source: "supadata" };
 }
 
 // --- ScrapeCreators ---
@@ -183,8 +201,21 @@ async function fetchFromScrapeCreators(
 
   const data = (await response.json()) as ScrapeCreatorsResponse;
 
+  let timedText: string | null = null;
+  if (data.transcript && data.transcript.length > 0) {
+    timedText = data.transcript
+      .map((seg) => {
+        const totalSec = Math.floor(parseInt(seg.startMs, 10) / 1000);
+        const mm = String(Math.floor(totalSec / 60)).padStart(2, "0");
+        const ss = String(totalSec % 60).padStart(2, "0");
+        return `[${mm}:${ss}] ${seg.text}`;
+      })
+      .join("\n");
+  }
+
   return {
     text: data.transcript_only_text || "",
+    timedText,
     lang: data.language || null,
     source: "scrapecreators",
   };

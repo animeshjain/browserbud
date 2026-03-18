@@ -28,6 +28,26 @@ When the user is on a YouTube video and asks you to summarize, explain, analyze,
 4. Answer the user's question grounded in the transcript content
 5. Optionally save a summary to `notes/youtube/{videoId}.md`
 
+### Current playback position
+
+You can ask the browser for the video's **current playback position** (timestamp, play/pause state) in real time. Use this whenever the user refers to where they are in the video.
+
+```bash
+npm run --prefix skills/yt-research cli -- context "<video-id>" [--window 90]
+```
+
+This queries the browser extension for the exact current time, then returns the transcript lines around that position. The `>>>` marker shows the current position.
+
+**When to use this:**
+- "what are they talking about right now"
+- "explain this part" / "explain this better"
+- "what did they just say"
+- "where I paused" / "at this point" / "this section"
+- "I don't understand this" / "can you clarify"
+- Any question that implies the user is referring to a specific moment in the video rather than the video as a whole
+
+**Do NOT** read the full transcript and guess — use the `context` command to get the exact position first.
+
 Use the `/yt-research` slash command for batch operations and listing cached videos.
 
 ## Memory Protocol

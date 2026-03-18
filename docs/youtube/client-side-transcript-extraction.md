@@ -145,3 +145,136 @@ YouTube returns captions in JSON3 format (requested via `&fmt=json3`). Structure
 Parsed into: `[{ startMs: 480, text: "hello everyone" }, ...]`
 
 Formatted as: `[00:00] hello everyone`
+
+## Timed transcript caching
+
+All three transcript providers now produce timestamped text when possible:
+
+| Provider | Timestamp source |
+|----------|-----------------|
+| **client** | JSON3 `tStartMs` fields (always available) |
+| **supadata** | Segment-level `startMs` when `text: false` is requested |
+| **scrapecreators** | `transcript[].startMs` in the API response |
+
+Timestamps are formatted as `[MM:SS] text` lines and cached separately as `transcript_timed.txt` alongside the existing files:
+
+```
+cache/youtube/{videoId}/
+├── transcript.md          # Formatted with metadata header (includes timestamps from client)
+├── transcript.txt         # Raw text (includes timestamps from client, plain from APIs)
+├── transcript_timed.txt   # [MM:SS] timestamped lines (when available)
+├── meta.json              # Video metadata
+└── comments.json/md       # Comments (if fetched)
+```
+
+The server detects timestamped content by matching `^\[\d{2}:\d{2}\] ` at cache time. The `context` CLI command reads `transcript_timed.txt` preferentially and falls back to `transcript.txt` if unavailable.
+
+## Player state and transcript context slicing
+
+The extension can report the video's **current playback position** on demand, using the same bidirectional WebSocket pattern as transcript extraction. This enables the `context` CLI command, which returns the transcript window around where the user is watching.
+
+### Player state request flow
+
+```
+yt-research CLI
+  │  fetchPlayerState(videoId)
+  │  POST /api/player-state { videoId }
+  ▼
+server.js
+  │  Sends { type: "get-player-state", videoId, requestId } via /ws/extension
+  ▼
+background.ts
+  │  Finds YouTube tab with v={videoId}
+  │  browser.tabs.sendMessage(tabId, { type: "getPlayerState", requestId })
+  ▼
+content.ts (ISOLATED world)
+  │  window.postMessage({ type: "BROWSERBUD_GET_PLAYER_STATE", requestId })
+  ▼
+youtube-player.ts (MAIN world)
+  │  Calls player.getCurrentTime(), player.getPlayerState(), player.getVideoData()
+  │  window.postMessage({ type: "BROWSERBUD_PLAYER_STATE_RESULT", ... })
+  ▼
+content.ts → browser.runtime.sendMessage({ type: "playerStateResult", ... })
+  ▼
+background.ts → extensionSocket.send({ type: "player-state-result", ... })
+  ▼
+server.js → resolves pending request → HTTP 200 to CLI
+  ▼
+yt-research CLI receives { ok, videoId, title, currentTime, currentTimeFormatted, duration, state, playbackRate }
+```
+
+### Player state response
+
+```json
+{
+  "ok": true,
+  "videoId": "P-RRxDxsh-Q",
+  "title": "Video Title",
+  "channel": "Channel Name",
+  "currentTime": 228.45,
+  "currentTimeFormatted": "03:48",
+  "duration": 1523.0,
+  "state": "paused",
+  "playbackRate": 1
+}
+```
+
+The `state` field maps YouTube's player states: `unstarted`, `ended`, `playing`, `paused`, `buffering`, `cued`.
+
+### Context command
+
+The `context` CLI command combines player state with the timed transcript to return a window around the current position:
+
+```bash
+npm run --prefix skills/yt-research cli -- context "<video-id>" [--window 90]
+```
+
+1. Fetches player state from the browser (current time, play/pause)
+2. Loads `transcript_timed.txt` (fetches transcript if not cached)
+3. Filters lines within ±half-window of the current time
+4. Marks the line closest to the current position with `>>>`
+
+Example output:
+
+```
+--- Transcript context: 03:03 – 04:33 ---
+
+    [03:05] and the prediction markets have been
+    [03:08] largely unregulated because they were
+    [03:11] considered to be a niche product
+>>> [03:48] but now the president's own family  ◀ current position
+    [03:51] members are trading on these platforms
+    [04:20] which raises serious conflict of interest
+
+--- End context (7 lines) ---
+```
+
+### Passive context enrichment
+
+In addition to the on-demand player state request, the content script polls the MAIN world for the current time every 5 seconds and includes it in the regular context push. This makes the MCP status line show:
+
+```
+youtube: Video Title (paused at 03:48)
+```
+
+This gives the Claude Code agent passive awareness of the playback position without needing to invoke the `context` command.
+
+### Timeouts
+
+| Layer | Timeout | On timeout |
+|-------|---------|------------|
+| youtube-player.ts (player state) | Synchronous | Returns error immediately if player not found |
+| server.js (pending request) | 5s | Rejects with 502 |
+| player_state.ts (HTTP fetch) | 5s | Throws, CLI exits with error |
+
+### Testing
+
+```bash
+# Test player state directly
+curl -X POST http://localhost:8989/api/player-state \
+  -H "Content-Type: application/json" \
+  -d '{"videoId":"P-RRxDxsh-Q"}'
+
+# Test context slicing via CLI
+npm run --prefix skills/yt-research cli -- context P-RRxDxsh-Q --window 90
+```

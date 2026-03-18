@@ -11,6 +11,7 @@ export interface VideoMeta {
 
 export interface TranscriptResult {
   text: string;
+  timedText: string | null; // "[MM:SS] line" format, null if timestamps unavailable
   lang: string | null;
   source: "client" | "supadata" | "scrapecreators";
 }

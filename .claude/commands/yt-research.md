@@ -1,16 +1,37 @@
 # YouTube Research
 
-Use the YouTube research CLI to fetch transcripts, get video metadata, and analyze video content.
+Use the YouTube research CLI to fetch transcripts, get video metadata, check the current playback position, and analyze video content.
 
 When the user is on a YouTube page (check `context/current.json` for the current URL), automatically fetch the transcript if needed before answering questions about the video.
 
+**IMPORTANT: You can see where the user is in the video.** The `context` command queries the browser for the exact current playback time and returns the transcript around that position. Use it whenever the user refers to a specific moment rather than the whole video.
+
 ## Commands
+
+### Get transcript around current playback position
+```bash
+npm run --prefix skills/yt-research cli -- context "<url-or-video-id>" [--window 90]
+```
+Queries the browser extension for the video's **current playback time** (works whether paused or playing), then returns the transcript lines centered on that position. The `>>>` marker shows the current position. Fetches the transcript automatically if not cached.
+
+**Use this when the user says:**
+- "what are they talking about" / "what's being discussed"
+- "explain this" / "explain this part" / "break this down"
+- "what did they just say" / "I missed that"
+- "at this point" / "right now" / "where I am" / "where I paused"
+- "I don't understand this" / "can you clarify"
+- Any reference to "this", "here", "now" in the context of video content
+
+**Do NOT** read the full transcript and guess the position — always use `context` first to get the exact timestamp.
+
+Options:
+- `--window <seconds>` — time window around current position (default: 90). Use 60 for focused, 120-180 for broader context.
 
 ### Fetch a video transcript
 ```bash
 npm run --prefix skills/yt-research cli -- transcript "<url-or-video-id>" [--force]
 ```
-Downloads the transcript and caches it to `cache/youtube/{videoId}/`. Uses client-side extraction with Supadata/ScrapeCreators fallback.
+Downloads the full transcript and caches it to `cache/youtube/{videoId}/`. Uses client-side extraction with Supadata/ScrapeCreators fallback. Use this for whole-video questions (summarize, analyze, etc.).
 
 ### Fetch video comments
 ```bash
@@ -40,10 +61,29 @@ npm run --prefix skills/yt-research cli -- list
 
 ## Workflow
 
-1. Check `context/current.json` for the current page URL — if it's a YouTube video, extract the video ID.
+### Deciding which command to use
+
+| User intent | Command |
+|---|---|
+| Refers to "this part", "right now", "where I am", current moment | `context` |
+| Asks to summarize, analyze, or question the whole video | `transcript` (then read cached file) |
+| Asks about audience reaction, opinions, discussion | `comments` |
+| Asks for video details (title, channel, duration) | `info` |
+
+### Answering questions about the whole video
+
+1. Check `context/current.json` for the current page URL — extract the video ID.
 2. Use `transcript` to fetch the video transcript. It's cached automatically.
 3. Read the cached `cache/youtube/{videoId}/transcript.md` — it includes metadata headers and the full transcript text.
 4. Answer the user's question using the transcript content. Ground your answers in actual quotes and language from the transcript.
+
+### Answering questions about the current position ("explain this")
+
+1. Get the video ID from `context/current.json`
+2. Run `context <video-id>` to get the transcript around the current playback position
+3. Read the output — the `>>>` marker shows exactly where the user is in the video
+4. If there are multiple topics in the window, ask the user to confirm which concept or part they want explained
+5. Explain using the actual transcript text, grounding your explanation in what was said
 
 ### When to fetch comments
 

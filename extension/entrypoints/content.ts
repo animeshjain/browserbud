@@ -13,6 +13,9 @@ export default defineContentScript({
       return new URLSearchParams(window.location.search).get("v");
     }
 
+    // Cache of last known player time (populated by MAIN world responses)
+    let lastPlayerTime: { currentTime: number; state: string } | null = null;
+
     function getContext() {
       const url = window.location.href;
       const title = document.title
@@ -20,9 +23,25 @@ export default defineContentScript({
         .trim();
 
       if (url.includes("/watch")) {
+        if (lastPlayerTime) {
+          const sec = Math.floor(lastPlayerTime.currentTime);
+          const mm = String(Math.floor(sec / 60)).padStart(2, "0");
+          const ss = String(sec % 60).padStart(2, "0");
+          return {
+            site: "youtube",
+            title: `${title} (${lastPlayerTime.state} at ${mm}:${ss})`,
+            url,
+          };
+        }
         return { site: "youtube", title, url };
       }
       return { site: "youtube", title: "browsing", url };
+    }
+
+    // Periodically ask the MAIN world for player time so context stays fresh
+    function requestPlayerTime() {
+      if (!window.location.href.includes("/watch")) return;
+      window.postMessage({ type: "BROWSERBUD_GET_PLAYER_STATE", requestId: "__context_poll__" }, "*");
     }
 
     function sendContext() {
@@ -167,18 +186,36 @@ export default defineContentScript({
           },
           "*",
         );
+      } else if (message.type === "getPlayerState") {
+        // Forward to MAIN world script via postMessage
+        window.postMessage(
+          {
+            type: "BROWSERBUD_GET_PLAYER_STATE",
+            requestId: message.requestId,
+          },
+          "*",
+        );
       }
     });
 
     sendContext();
 
+    // Poll player time every 5s so context includes approximate position
+    setInterval(() => {
+      requestPlayerTime();
+    }, 5000);
+    // Initial request after MAIN world script loads
+    setTimeout(requestPlayerTime, 2000);
+
     // YouTube fires this custom event on SPA navigation
     document.addEventListener("yt-navigate-finish", () => {
       // Title needs a moment to update after navigation
+      lastPlayerTime = null;
       setTimeout(() => {
         sendContext();
         removeCaptureButton();
         injectCaptureButton();
+        requestPlayerTime();
       }, 1500);
     });
 
@@ -221,6 +258,22 @@ export default defineContentScript({
           meta: event.data.meta,
           error: event.data.error,
         });
+      } else if (event.data?.type === "BROWSERBUD_PLAYER_STATE_RESULT") {
+        // Update cached player time for context enrichment
+        if (event.data.currentTime !== undefined) {
+          lastPlayerTime = {
+            currentTime: event.data.currentTime,
+            state: event.data.state || "unknown",
+          };
+        }
+        // Only forward to background if it's a real request (not our poll)
+        if (event.data.requestId !== "__context_poll__") {
+          const { type: _ignored, ...rest } = event.data;
+          browser.runtime.sendMessage({
+            type: "playerStateResult",
+            ...rest,
+          });
+        }
       }
     });
   },

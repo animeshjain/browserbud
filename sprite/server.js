@@ -305,7 +305,7 @@ extensionWss.on("connection", (ws) => {
     try {
       const msg = JSON.parse(data);
       log.debug({ type: msg.type }, "extension message received");
-      if ((msg.type === "extract-transcript-result" || msg.type === "extract-comments-result") && msg.requestId) {
+      if ((msg.type === "extract-transcript-result" || msg.type === "extract-comments-result" || msg.type === "player-state-result") && msg.requestId) {
         const pending = pendingRequests.get(msg.requestId);
         if (pending) {
           clearTimeout(pending.timer);
@@ -388,6 +388,10 @@ function handleExtractTranscript(req, res) {
         if (!fs.existsSync(path.join(videoDir, "transcript.txt"))) {
           fs.mkdirSync(videoDir, { recursive: true });
           fs.writeFileSync(path.join(videoDir, "transcript.txt"), result.text);
+          // Client extraction produces [MM:SS] timestamped lines
+          if (result.text.match(/^\[\d{2}:\d{2}\] /m)) {
+            fs.writeFileSync(path.join(videoDir, "transcript_timed.txt"), result.text);
+          }
           const meta = result.meta || {};
           const mdLines = [
             `# ${meta.title || videoId}`,
@@ -550,6 +554,56 @@ function handleExtractComments(req, res) {
   });
 }
 
+function handleGetPlayerState(req, res) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
+    return;
+  }
+
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", async () => {
+    try {
+      const { videoId } = JSON.parse(body);
+      if (!videoId) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "videoId is required" }));
+        return;
+      }
+
+      log.info({ videoId }, "requesting player state from extension");
+      const result = await sendExtensionCommand({
+        type: "get-player-state",
+        videoId,
+      }, 5000);
+
+      if (result.success) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          ok: true,
+          videoId: result.videoId,
+          title: result.title,
+          channel: result.channel,
+          currentTime: result.currentTime,
+          currentTimeFormatted: result.currentTimeFormatted,
+          duration: result.duration,
+          state: result.state,
+          playbackRate: result.playbackRate,
+        }));
+      } else {
+        log.warn({ videoId, error: result.error }, "player state request failed");
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: result.error || "Failed to get player state" }));
+      }
+    } catch (err) {
+      log.error({ err: err.message }, "player-state error");
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    }
+  });
+}
+
 // ─── HTTP Proxy + Context API ───────────────────────────────────────────────
 
 const proxy = httpProxy.createProxyServer({
@@ -658,6 +712,10 @@ function handleTranscript(req, res) {
 
       fs.writeFileSync(path.join(videoDir, "transcript.md"), mdLines.join("\n"));
       fs.writeFileSync(path.join(videoDir, "transcript.txt"), text);
+      // Client-side extraction produces [MM:SS] timestamped lines — save as timed transcript too
+      if (text.match(/^\[\d{2}:\d{2}\] /m)) {
+        fs.writeFileSync(path.join(videoDir, "transcript_timed.txt"), text);
+      }
       fs.writeFileSync(
         path.join(videoDir, "meta.json"),
         JSON.stringify(
@@ -761,6 +819,10 @@ const server = http.createServer((req, res) => {
 
   if (req.url === "/api/extract-comments") {
     return handleExtractComments(req, res);
+  }
+
+  if (req.url === "/api/player-state") {
+    return handleGetPlayerState(req, res);
   }
 
   // Serve the bridge script

@@ -32,12 +32,26 @@ export function saveTranscript(
   transcriptMd: string,
   transcriptTxt: string,
   meta: VideoMeta,
+  timedText?: string | null,
 ): void {
   const dir = videoDir(videoId);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "transcript.md"), transcriptMd);
   writeFileSync(join(dir, "transcript.txt"), transcriptTxt);
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+  if (timedText) {
+    writeFileSync(join(dir, "transcript_timed.txt"), timedText);
+  }
+}
+
+export function isTimedTranscriptCached(videoId: string): boolean {
+  return existsSync(join(videoDir(videoId), "transcript_timed.txt"));
+}
+
+export function loadCachedTimedTranscript(videoId: string): string | null {
+  const p = join(videoDir(videoId), "transcript_timed.txt");
+  if (!existsSync(p)) return null;
+  return readFileSync(p, "utf-8");
 }
 
 export function isCommentsCached(videoId: string): boolean {

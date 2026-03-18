@@ -398,10 +398,63 @@ export default defineContentScript({
       return num;
     }
 
+    // ─── Player State ─────────────────────────────────────────────────
+
+    function getPlayerState(): Record<string, any> | null {
+      const player = getPlayer() as any;
+      if (!player || !player.getCurrentTime) return null;
+
+      const currentTime: number = player.getCurrentTime() || 0;
+      const duration: number = player.getDuration() || 0;
+      const state: number = player.getPlayerState(); // -1=unstarted, 0=ended, 1=playing, 2=paused, 3=buffering, 5=cued
+      const playbackRate: number = player.getPlaybackRate() || 1;
+      const videoData = player.getVideoData?.() || {};
+
+      const stateNames: Record<number, string> = {
+        [-1]: "unstarted",
+        0: "ended",
+        1: "playing",
+        2: "paused",
+        3: "buffering",
+        5: "cued",
+      };
+
+      const totalSec = Math.floor(currentTime);
+      const mm = String(Math.floor(totalSec / 60)).padStart(2, "0");
+      const ss = String(totalSec % 60).padStart(2, "0");
+
+      return {
+        videoId: videoData.video_id || getVideoId() || "",
+        title: videoData.title || document.title.replace(/ - YouTube$/, "").trim(),
+        channel: videoData.author || "",
+        currentTime,
+        currentTimeFormatted: `${mm}:${ss}`,
+        duration,
+        state: stateNames[state] || `unknown(${state})`,
+        playbackRate,
+      };
+    }
+
     // ─── Extraction Trigger ─────────────────────────────────────────────
 
     window.addEventListener("message", (event) => {
       if (event.source !== window) return;
+
+      // ─── Player State ─────────────────────────────────────────────────
+      if (event.data?.type === "BROWSERBUD_GET_PLAYER_STATE") {
+        const { requestId } = event.data;
+        const state = getPlayerState();
+        window.postMessage(
+          {
+            type: "BROWSERBUD_PLAYER_STATE_RESULT",
+            requestId,
+            success: !!state,
+            ...(state || { error: "Player not found or not ready" }),
+          },
+          "*",
+        );
+        return;
+      }
 
       // ─── Comment Extraction ───────────────────────────────────────────
       if (event.data?.type === "BROWSERBUD_EXTRACT_COMMENTS") {

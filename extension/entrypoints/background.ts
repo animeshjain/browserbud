@@ -98,6 +98,8 @@ async function connectExtensionWs() {
           await handleExtractTranscriptCommand(msg);
         } else if (msg.type === "extract-comments") {
           await handleExtractCommentsCommand(msg);
+        } else if (msg.type === "get-player-state") {
+          await handleGetPlayerStateCommand(msg);
         }
       } catch (err) {
         console.error("BrowserBud: WebSocket message error", err);
@@ -215,6 +217,48 @@ async function handleExtractCommentsCommand(msg: {
   }
 }
 
+async function handleGetPlayerStateCommand(msg: {
+  type: string;
+  videoId: string;
+  requestId: string;
+}) {
+  const { videoId, requestId } = msg;
+
+  const tabs = await browser.tabs.query({ url: "*://*.youtube.com/watch*" });
+  let targetTabId: number | null = null;
+
+  for (const tab of tabs) {
+    if (tab.id != null && tab.url?.includes(`v=${videoId}`)) {
+      targetTabId = tab.id;
+      break;
+    }
+  }
+
+  if (targetTabId == null) {
+    sendToServer({
+      type: "player-state-result",
+      requestId,
+      success: false,
+      error: `Video ${videoId} not open in any tab`,
+    });
+    return;
+  }
+
+  try {
+    await browser.tabs.sendMessage(targetTabId, {
+      type: "getPlayerState",
+      requestId,
+    });
+  } catch (err) {
+    sendToServer({
+      type: "player-state-result",
+      requestId,
+      success: false,
+      error: `Failed to reach content script: ${err}`,
+    });
+  }
+}
+
 function sendToServer(msg: Record<string, any>) {
   if (extensionSocket && extensionSocket.readyState === WebSocket.OPEN) {
     extensionSocket.send(JSON.stringify(msg));
@@ -278,6 +322,13 @@ export default defineBackground(() => {
         totalCount: message.totalCount,
         meta: message.meta,
         error: message.error,
+      });
+    } else if (message.type === "playerStateResult") {
+      // Forward player state result back to server via WebSocket
+      const { type: _ignored, ...rest } = message;
+      sendToServer({
+        type: "player-state-result",
+        ...rest,
       });
     }
   });
