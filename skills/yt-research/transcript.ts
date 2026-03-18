@@ -1,7 +1,22 @@
 /**
- * Transcript fetching with Supadata primary + ScrapeCreators fallback.
+ * Transcript fetching: client-side extraction -> Supadata -> ScrapeCreators.
  *
- * Fallback triggers when Supadata returns empty or suspiciously short text.
+ * Provider chain (first success wins, failures fall through):
+ *
+ * 1. Client (free) - Asks the browser extension to extract the transcript
+ *    from the YouTube page. Works by intercepting YouTube's own XHR to
+ *    /api/timedtext, which includes a Proof of Origin Token (POT) that
+ *    can't be obtained any other way. Requires the user to have the video
+ *    open in a tab. POSTs to the local server's /api/extract-transcript,
+ *    which forwards the request to the extension via WebSocket.
+ *    See docs/client-side-transcript-extraction.md for the full flow.
+ *
+ * 2. Supadata (paid) - Server-side API, works for any video.
+ *
+ * 3. ScrapeCreators (paid) - Fallback if Supadata fails.
+ *
+ * Fallback also triggers when a provider returns empty or suspiciously
+ * short text (below MIN_WPM threshold for the video's duration).
  */
 
 import { Supadata } from "@supadata/js";
@@ -175,7 +190,7 @@ async function fetchFromScrapeCreators(
   };
 }
 
-// --- Chain: Supadata → ScrapeCreators fallback ---
+// --- Chain: client → Supadata → ScrapeCreators ---
 
 export async function fetchTranscript(
   videoId: string,
