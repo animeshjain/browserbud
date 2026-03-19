@@ -57,7 +57,7 @@ yt-research CLI receives { ok: true, comments: [...], totalCount, meta }
 POST https://www.youtube.com/youtubei/v1/next?key={INNERTUBE_API_KEY}
 ```
 
-The API key is read from `ytcfg.get("INNERTUBE_API_KEY")` on the page. It's a public key, not user-specific: `AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8`.
+The API key is read from `ytcfg.get("INNERTUBE_API_KEY")` on the page. It's a public key, the same for all users — not a secret.
 
 ### Request body
 
