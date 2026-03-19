@@ -12,18 +12,25 @@ BrowserBud puts Claude Code in a browser side panel and feeds it context about w
 browse, the context of the page is automatically sent to claude code. No copy-pasting URLs, no tab-switching to a 
 chat window.
 
-Plan is to make it work well for all sites, but handle some specific use cases well to make it more powerful. So the 
-first version has some nice youtube integration. It can extract transcripts, easily take video frames into context 
-for asking questions about infographics / charts in the video, and analyze comments (coming soon).
+Everything BrowserBud produces - summaries, notes, transcripts - goes to a local folder (`~/browse/`) on your
+machine. Since Claude Code runs in that same folder, it can reference past research. Ask it to compare things you
+looked at last week, pull together notes from different sessions, or build on previous summaries. Your research
+compounds instead of disappearing into a chat log.
 
-Will update here as I polish this a bit more.
+Say you're researching marketing tools. You watch a few YouTube reviews, read some blog posts, check a Reddit thread.
+For each one, you ask BrowserBud to summarize what matters. A few days later you ask "which of the tools I've looked
+at would be best for a bootstrapped startup?" - it reads its own notes and gives you a real answer.
+
+The first version has YouTube-specific features (transcript extraction, video frame capture, comment analysis) but
+works on any page. More site-specific integrations are coming.
 
 ## What it does
 
 - Runs Claude Code in a browser side panel via a terminal (ttyd)
-- Pushes your current page context (title, URL) to Claude Code's status line in real time
-- On YouTube: extracts transcripts directly from the page so Claude can summarize, explain, or answer questions about
-  videos
+- Pushes your current page context (title, URL, selected text) to Claude Code in real time
+- Saves all output (summaries, notes, analysis) to `~/browse/` - a local folder Claude Code can read back later
+- Works on any page: ask about articles, docs, forum threads, whatever you're reading
+- On YouTube: extracts transcripts, captures video frames, reads comments
 - Skills system: domain-specific CLI tools Claude Code can call on its own (YouTube research is the first)
 
 ## How it works
