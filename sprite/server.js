@@ -46,7 +46,6 @@ const BRIDGE_SCRIPT = `
       if (url.toString().includes('/ws')) {
         ttydSocket = this;
         console.log('[BrowserBud] Captured ttyd WebSocket');
-        // Re-capture on reconnect
         this.addEventListener('close', function() {
           if (ttydSocket === this) ttydSocket = null;
         });
@@ -55,6 +54,7 @@ const BRIDGE_SCRIPT = `
   }
   window.WebSocket = BrowserBudWebSocket;
 
+  // postMessage bridge: type text into the terminal
   window.addEventListener('message', function(event) {
     if (!event.data || event.data.type !== 'browserbud:type-text') return;
     if (!ttydSocket || ttydSocket.readyState !== WebSocket.OPEN) {
