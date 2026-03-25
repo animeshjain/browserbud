@@ -349,13 +349,36 @@ extensionWss.on("connection", (ws) => {
   ws.on("close", () => clearInterval(pingInterval));
 });
 
-function sendExtensionCommand(command, timeoutMs = 15000) {
+function waitForExtension(timeoutMs) {
   return new Promise((resolve, reject) => {
-    if (!extensionWs || extensionWs.readyState !== extensionWs.OPEN) {
-      reject(new Error("Extension not connected"));
+    if (extensionWs && extensionWs.readyState === extensionWs.OPEN) {
+      resolve();
       return;
     }
+    const deadline = Date.now() + timeoutMs;
+    let delay = 250; // start at 250ms, double each retry
+    function check() {
+      if (extensionWs && extensionWs.readyState === extensionWs.OPEN) {
+        resolve();
+        return;
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        reject(new Error("Extension not connected (timed out waiting)"));
+        return;
+      }
+      delay = Math.min(delay * 2, remaining, 4000); // cap at 4s
+      log.debug({ delay, remaining }, "waiting for extension to connect");
+      setTimeout(check, delay);
+    }
+    check();
+  });
+}
 
+async function sendExtensionCommand(command, timeoutMs = 15000) {
+  await waitForExtension(10000); // wait up to 10s for extension to connect
+
+  return new Promise((resolve, reject) => {
     const requestId = uuidv4();
     const timer = setTimeout(() => {
       pendingRequests.delete(requestId);
