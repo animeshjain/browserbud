@@ -4,6 +4,7 @@ const path = require("path");
 const httpProxy = require("http-proxy");
 const { WebSocketServer } = require("ws");
 const { v4: uuidv4 } = require("uuid");
+const { execSync } = require("child_process");
 const pino = require("pino");
 
 // ─── Logging ────────────────────────────────────────────────────────────────
@@ -68,6 +69,75 @@ const BRIDGE_SCRIPT = `
     ttydSocket.send('0' + text);
     console.log('[BrowserBud] Typed into terminal:', text);
   });
+
+  // === Clipboard & Context Menu ===
+
+  // Block right-click mousedown from reaching xterm.js so it never forwards
+  // the event to ttyd/tmux (prevents tmux's built-in context menu).
+  document.addEventListener('mousedown', function(e) {
+    if (e.button === 2) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    }
+  }, true);
+
+  // Custom context menu
+  var _menu = null;
+  function hideMenu() {
+    if (_menu && _menu.parentNode) _menu.parentNode.removeChild(_menu);
+    _menu = null;
+  }
+  function mkItem(label, fn, disabled) {
+    var el = document.createElement('div');
+    el.textContent = label;
+    el.style.cssText = 'padding:6px 16px;cursor:' + (disabled ? 'default' : 'pointer') + ';color:' + (disabled ? '#555' : '#e0e0e0') + ';white-space:nowrap';
+    if (!disabled) {
+      el.addEventListener('mouseenter', function() { el.style.background = '#3d3d3d'; });
+      el.addEventListener('mouseleave', function() { el.style.background = 'none'; });
+      el.addEventListener('click', function(e) { e.stopPropagation(); hideMenu(); fn(); });
+    }
+    return el;
+  }
+  function showMenu(x, y) {
+    hideMenu();
+    _menu = document.createElement('div');
+    _menu.style.cssText = 'position:fixed;z-index:99999;background:#252526;border:1px solid #454545;border-radius:4px;padding:4px 0;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;color:#e0e0e0;min-width:140px;box-shadow:0 4px 12px rgba(0,0,0,0.5)';
+    _menu.style.left = x + 'px';
+    _menu.style.top = y + 'px';
+
+    _menu.appendChild(mkItem('Copy', function() {
+      // Read from tmux paste buffer (populated by copy-pipe on drag select)
+      fetch('/api/clipboard').then(function(r) { return r.json(); }).then(function(data) {
+        if (data.text) {
+          navigator.clipboard.writeText(data.text).catch(function(err) {
+            console.warn('[BrowserBud] Clipboard write failed:', err);
+          });
+        }
+      }).catch(function(err) {
+        console.warn('[BrowserBud] Copy failed:', err);
+      });
+    }));
+
+    _menu.appendChild(mkItem('Paste', function() {
+      navigator.clipboard.readText().then(function(text) {
+        if (text && ttydSocket && ttydSocket.readyState === 1) {
+          ttydSocket.send('0' + text);
+        }
+      }).catch(function(err) {
+        console.warn('[BrowserBud] Paste failed:', err);
+      });
+    }));
+
+    document.body.appendChild(_menu);
+    // Keep on-screen
+    var rect = _menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) _menu.style.left = Math.max(0, window.innerWidth - rect.width - 4) + 'px';
+    if (rect.bottom > window.innerHeight) _menu.style.top = Math.max(0, window.innerHeight - rect.height - 4) + 'px';
+  }
+
+  document.addEventListener('contextmenu', function(e) { e.preventDefault(); showMenu(e.clientX, e.clientY); });
+  document.addEventListener('click', function() { hideMenu(); });
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape') hideMenu(); });
 })();
 `;
 
@@ -865,6 +935,80 @@ function handleFrame(req, res) {
   });
 }
 
+const TMUX_SOCKET = process.env.BROWSERBUD_TMUX_SOCKET || "browserbud";
+
+// Rejoin lines that were soft-wrapped by the application (Ink sends explicit \n
+// for word-wrapping, so tmux treats every break as a hard newline).  We detect
+// wraps by checking whether the *original* line filled most of the terminal width.
+function unwrapText(text, width) {
+  if (!width) return text;
+  const lines = text.split("\n");
+  if (lines.length <= 1) return text;
+
+  const threshold = Math.floor(width * 0.85);
+  const result = [lines[0]];
+  let lastOrigLen = lines[0].length;
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    const prev = result[result.length - 1];
+
+    // Empty line or previous was empty → paragraph break
+    if (line === "" || prev === "") {
+      result.push(line);
+      lastOrigLen = line.length;
+      continue;
+    }
+
+    // Current line starts a block-level element → keep separate
+    if (/^(\s*[-*•+]\s|\s*\d+[.)]\s|\s*#+\s|```|---+|===+|\s*>\s)/.test(line)) {
+      result.push(line);
+      lastOrigLen = line.length;
+      continue;
+    }
+
+    // Previous original line was near terminal width → likely a soft wrap
+    if (lastOrigLen >= threshold && lastOrigLen <= width) {
+      const trimmed = line.replace(/^\s+/, "");
+      const needsSpace = !prev.endsWith(" ") && trimmed.length > 0;
+      result[result.length - 1] = prev + (needsSpace ? " " : "") + trimmed;
+      lastOrigLen = line.length;
+    } else {
+      result.push(line);
+      lastOrigLen = line.length;
+    }
+  }
+
+  return result.join("\n");
+}
+
+function handleClipboard(req, res) {
+  if (req.method !== "GET") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
+    return;
+  }
+  try {
+    const text = execSync(`tmux -L ${TMUX_SOCKET} show-buffer 2>/dev/null`, {
+      encoding: "utf-8",
+      timeout: 2000,
+    });
+    let width = 0;
+    try {
+      width = parseInt(execSync(`tmux -L ${TMUX_SOCKET} display -p '#{pane_width}' 2>/dev/null`, {
+        encoding: "utf-8",
+        timeout: 2000,
+      }).trim(), 10) || 0;
+    } catch {}
+    const result = width > 0 ? unwrapText(text, width) : text;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ text: result || "" }));
+  } catch {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ text: "" }));
+  }
+}
+
 const server = http.createServer((req, res) => {
   const reqStart = Date.now();
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -903,6 +1047,10 @@ const server = http.createServer((req, res) => {
 
   if (req.url === "/api/extract-page-content") {
     return handleExtractPageContent(req, res);
+  }
+
+  if (req.url === "/api/clipboard") {
+    return handleClipboard(req, res);
   }
 
   // Serve the bridge script

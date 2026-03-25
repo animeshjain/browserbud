@@ -110,6 +110,20 @@ tmux -L "$TMUX_SOCKET" set-option -t "$TMUX_SESSION" mouse on
 tmux -L "$TMUX_SOCKET" bind -T root WheelUpPane if-shell -Ft= '#{pane_in_mode}' 'send-keys -M' 'copy-mode -e'
 tmux -L "$TMUX_SOCKET" bind -T root WheelDownPane if-shell -Ft= '#{pane_in_mode}' 'send-keys -M' ''
 
+# Disable tmux's built-in right-click context menu (bridge script provides one).
+tmux -L "$TMUX_SOCKET" unbind -T root MouseDown3Pane 2>/dev/null || true
+tmux -L "$TMUX_SOCKET" unbind -T copy-mode MouseDown3Pane 2>/dev/null || true
+tmux -L "$TMUX_SOCKET" unbind -T copy-mode-vi MouseDown3Pane 2>/dev/null || true
+
+# Mouse drag: keep selection visible after release but do NOT copy to clipboard.
+# copy-selection-no-clear stays in copy-mode with highlight intact.
+# User right-clicks → Copy to explicitly copy, or clicks anywhere to cancel.
+tmux -L "$TMUX_SOCKET" bind -T copy-mode MouseDragEnd1Pane send-keys -X copy-selection-no-clear
+tmux -L "$TMUX_SOCKET" bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-selection-no-clear
+# Left-click exits copy-mode so normal input resumes.
+tmux -L "$TMUX_SOCKET" bind -T copy-mode MouseDown1Pane select-pane \\\; send-keys -X cancel
+tmux -L "$TMUX_SOCKET" bind -T copy-mode-vi MouseDown1Pane select-pane \\\; send-keys -X cancel
+
 # Use the most recently active client's size instead of the smallest.
 tmux -L "$TMUX_SOCKET" set-option -t "$TMUX_SESSION" -g window-size latest
 
