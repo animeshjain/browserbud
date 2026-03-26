@@ -341,11 +341,13 @@ extensionWss.on("connection", (ws) => {
       session.activeTabUrl = null;
       session.capabilities = [];
     }
-    // Reject all pending requests
+    // Reject only pending requests that were sent on this socket
     for (const [id, pending] of pendingRequests) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error("Panel disconnected"));
-      pendingRequests.delete(id);
+      if (pending.ws === ws) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error("Panel disconnected"));
+        pendingRequests.delete(id);
+      }
     }
   });
 
@@ -396,7 +398,7 @@ async function sendExtensionCommand(command, timeoutMs = 15000) {
       reject(new Error("Timeout waiting for extension response"));
     }, timeoutMs);
 
-    pendingRequests.set(requestId, { resolve, reject, timer });
+    pendingRequests.set(requestId, { resolve, reject, timer, ws: extensionWs });
     extensionWs.send(JSON.stringify({ ...command, requestId }));
   });
 }

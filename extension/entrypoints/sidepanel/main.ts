@@ -88,6 +88,13 @@ async function connectExtensionWs() {
   if (!currentServerUrl) return;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
+  // Close any existing socket before opening a new one
+  if (extensionSocket) {
+    const old = extensionSocket;
+    extensionSocket = null;
+    old.close();
+  }
+
   const wsUrl = currentServerUrl.replace(/^http/, "ws") + "/ws/extension";
 
   try {
@@ -140,6 +147,7 @@ async function connectExtensionWs() {
     });
 
     ws.addEventListener("close", () => {
+      if (extensionSocket !== ws) return; // stale socket, ignore
       console.log("BrowserBud: panel WebSocket disconnected, reconnecting in 3s...");
       extensionSocket = null;
       if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
@@ -300,20 +308,69 @@ async function handleGetPageContentCommand(msg: {
   const { requestId } = msg;
 
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) {
-      sendToServer({
-        type: "page-content-result",
-        requestId,
-        success: false,
-        error: "No active tab found",
-      });
-      return;
+    // Use tracked activeTabId first, fall back to querying
+    let tabId = activeTabId;
+    let tabUrl: string | undefined;
+
+    if (!tabId) {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = tabs?.[0];
+      if (!tab?.id) {
+        sendToServer({
+          type: "page-content-result",
+          requestId,
+          success: false,
+          error: "No active tab found",
+        });
+        return;
+      }
+      tabId = tab.id;
+      tabUrl = tab.url;
     }
 
-    const result = await chrome.tabs.sendMessage(tab.id, {
-      type: "getPageContent",
-    });
+    // Try content script first
+    let result: { content: string; title: string; url: string } | null = null;
+    try {
+      result = await chrome.tabs.sendMessage(tabId, { type: "getPageContent" });
+    } catch {
+      // Content script not available — fall back to scripting API
+    }
+
+    if (!result) {
+      try {
+        const [injection] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const semantic = document.querySelector("article, main, [role='main']");
+            if (semantic) {
+              return {
+                content: semantic.textContent?.trim() || "",
+                title: document.title.trim(),
+                url: window.location.href,
+              };
+            }
+            const clone = document.body.cloneNode(true) as HTMLElement;
+            for (const tag of ["script", "style", "nav", "header", "footer", "aside", "noscript"]) {
+              for (const el of clone.querySelectorAll(tag)) el.remove();
+            }
+            return {
+              content: clone.textContent?.trim() || "",
+              title: document.title.trim(),
+              url: window.location.href,
+            };
+          },
+        });
+        result = injection?.result ?? null;
+      } catch (scriptErr) {
+        sendToServer({
+          type: "page-content-result",
+          requestId,
+          success: false,
+          error: `Cannot extract content from this page (${tabUrl || "unknown URL"})`,
+        });
+        return;
+      }
+    }
 
     if (result) {
       sendToServer({
@@ -329,7 +386,7 @@ async function handleGetPageContentCommand(msg: {
         type: "page-content-result",
         requestId,
         success: false,
-        error: "No response from content script",
+        error: "No content extracted from page",
       });
     }
   } catch (err) {
@@ -337,7 +394,7 @@ async function handleGetPageContentCommand(msg: {
       type: "page-content-result",
       requestId,
       success: false,
-      error: `Failed to reach content script: ${err}`,
+      error: `Page content extraction failed: ${err instanceof Error ? err.message : String(err)}`,
     });
   }
 }
@@ -414,7 +471,7 @@ helpOverlay.addEventListener("click", (e) => {
 
 // ─── Message listener (results from content scripts + typeInTerminal) ────────
 
-browser.runtime.onMessage.addListener((message: Record<string, any>) => {
+browser.runtime.onMessage.addListener((message: Record<string, any>, sender: any) => {
   if (message.type === "typeInTerminal" && message.text) {
     typeInTerminal(message.text);
   } else if (message.type === "transcriptResult") {
@@ -444,6 +501,8 @@ browser.runtime.onMessage.addListener((message: Record<string, any>) => {
       ...rest,
     });
   } else if (message.type === "contentScriptReady") {
+    // Only accept from the active tab (or if we haven't tracked one yet)
+    if (activeTabId != null && sender.tab?.id !== activeTabId) return;
     activeTabCapabilities = message.capabilities || [];
     sendToServer({
       type: "session-update",
@@ -467,6 +526,23 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
       activeTabUrl: tab.url,
       capabilities: activeTabCapabilities,
     });
+  } catch {}
+});
+
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, windowId });
+    if (tab?.id && tab.id !== activeTabId) {
+      activeTabId = tab.id;
+      activeTabCapabilities = await probeTabCapabilities(tab.id);
+      sendToServer({
+        type: "session-update",
+        activeTabId: tab.id,
+        activeTabUrl: tab.url,
+        capabilities: activeTabCapabilities,
+      });
+    }
   } catch {}
 });
 
