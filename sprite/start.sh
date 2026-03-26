@@ -58,6 +58,9 @@ BROWSERBUD_TTYD_PORT="${BROWSERBUD_TTYD_PORT:-7682}"
 export BROWSERBUD_PORT
 export BROWSERBUD_TTYD_PORT
 
+# Build the terminal bridge (requires esbuild devDependency in sprite/)
+node "$SCRIPT_DIR/bridge/build.mjs"
+
 # Remove stale port file so we wait for the fresh one
 rm -f "$PORT_FILE"
 

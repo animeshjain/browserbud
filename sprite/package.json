@@ -2,10 +2,19 @@
   "name": "browserbud-sprite",
   "version": "1.0.0",
   "private": true,
+  "scripts": {
+    "build:bridge": "node bridge/build.mjs",
+    "test:bridge": "vitest run bridge/bridge_core.test.ts",
+    "test:bridge:watch": "vitest bridge/bridge_core.test.ts"
+  },
   "dependencies": {
     "http-proxy": "^1.18.1",
     "pino": "^10.3.1",
     "uuid": "^13.0.0",
     "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "vitest": "^3.1.0"
   }
 }

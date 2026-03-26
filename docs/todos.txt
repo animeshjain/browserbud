@@ -1,0 +1,4 @@
+- why is firefox extension build mv2, is it not outdated?
+- copy does not work from browserbud ttyd terminal
+- youtube shorts are not supported
+- selection for a whole page does not seem to be working, only the top few lines are getting passed

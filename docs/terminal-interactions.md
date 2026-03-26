@@ -2,6 +2,10 @@
 
 This document explains how BrowserBud handles terminal scrollback, selection, copy, paste, and typed input inside the sidepanel ttyd iframe.
 
+For the forward-looking cleanup and automated testing roadmap, see:
+
+- [docs/terminal-refactor-and-testing-plan.md](/Users/animeshjain/Projects/browserbud/docs/terminal-refactor-and-testing-plan.md)
+
 It exists because this area crosses four different systems:
 
 1. Chrome/browser event handling

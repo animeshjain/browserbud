@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "setup": "npm install --prefix sprite && npm install --prefix skills/yt-research && npm install --prefix extension",
+    "build:bridge": "npm run --prefix sprite build:bridge",
+    "test:bridge": "npm run --prefix sprite test:bridge",
     "start": "bash sprite/start.sh",
     "build:extension": "npm run --prefix extension build",
     "dev:extension": "npm run --prefix extension dev"

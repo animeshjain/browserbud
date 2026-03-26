@@ -5,3 +5,4 @@ skills/*/output/
 context.json
 .claude/settings.local.json
 sprite/.claude/
+sprite/bridge/*.built.js
