@@ -40,6 +40,12 @@ function showSetup() {
 // Track the current server URL for postMessage targeting
 let currentServerUrl: string | null = null;
 
+function postToTerminal(message: { type: "browserbud:type-text"; text: string }) {
+  if (!terminalFrame.contentWindow || !currentServerUrl) return;
+  const origin = new URL(currentServerUrl).origin;
+  terminalFrame.contentWindow.postMessage(message, origin);
+}
+
 function showTerminal(url: string) {
   setupScreen.style.display = "none";
   terminalFrame.style.display = "block";
@@ -51,12 +57,7 @@ function showTerminal(url: string) {
 
 // Type text into the Claude Code terminal via the injected bridge script
 function typeInTerminal(text: string) {
-  if (!terminalFrame.contentWindow || !currentServerUrl) return;
-  const origin = new URL(currentServerUrl).origin;
-  terminalFrame.contentWindow.postMessage(
-    { type: "browserbud:type-text", text },
-    origin,
-  );
+  postToTerminal({ type: "browserbud:type-text", text });
 }
 
 // First-time setup
