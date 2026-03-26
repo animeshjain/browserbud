@@ -52,6 +52,40 @@
       font-size: 16px;
     }
 
+    /* Auth banner */
+    #auth-banner {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      background: #1a1a2e;
+      border-bottom: 1px solid #333;
+      color: #ccc;
+      font-size: 13px;
+      z-index: 60;
+    }
+    #auth-banner a {
+      color: #7c8aff;
+      text-decoration: underline;
+      word-break: break-all;
+      flex: 1;
+    }
+    #auth-banner a:hover {
+      color: #a0aaff;
+    }
+    #auth-banner button {
+      background: none;
+      border: none;
+      color: #888;
+      font-size: 18px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+    }
+    #auth-banner button:hover {
+      color: #e0e0e0;
+    }
+
     /* Terminal iframe */
     #terminal-frame {
       width: 100%;
@@ -255,6 +289,12 @@
   <div id="action-btns">
     <button class="help-btn" id="help-btn" title="Help">?</button>
     <button class="settings-btn" id="settings-btn" title="Settings">&#9881;</button>
+  </div>
+
+  <div id="auth-banner" style="display:none">
+    <span>Claude Code needs to log in.</span>
+    <a id="auth-link" href="#" target="_blank" rel="noopener">Open login page</a>
+    <button id="auth-dismiss" title="Dismiss">&times;</button>
   </div>
 
   <iframe id="terminal-frame" allow="clipboard-read; clipboard-write"></iframe>

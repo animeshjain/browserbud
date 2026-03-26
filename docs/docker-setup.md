@@ -23,11 +23,14 @@ This only works on macOS/Linux. Windows has no native tmux, ttyd is less tested,
 ## Proposed Setup (Docker) — V1
 
 ```bash
-# One-time: authenticate Claude Code on host
-claude /login
-
 # Every time: start BrowserBud
+git clone https://github.com/animeshjain/browserbud.git
+cd browserbud
 docker compose up
+
+# First run: Claude Code shows a login URL in the terminal.
+# The extension detects it and shows a clickable banner.
+# Authenticate once — credentials persist in ~/.browserbud/
 
 # One-time: install browser extension
 # Firefox: setup script installs signed .xpi silently
@@ -50,11 +53,13 @@ V1 must include:
 ```
 Host machine                          Docker container
 ─────────────────                     ──────────────────────────────
-~/.claude/.credentials.json    ──►    /home/bb/.claude/creds/       (bind mount, read-only)
-~/.claude/settings.json        ──►    /home/bb/.claude/settings.json (bind mount, read-only)
-                                      /home/bb/.claude/ide/          (container-local, tmpfs)
-                                      /home/bb/.claude/projects/     (container-local)
-~/browse/                      ──►    /home/bb/browse/               (bind mount, read-write)
+~/.browserbud/claude-config/   ──►    /home/bb/.claude/              (bind mount, read-write)
+  .credentials.json                     credentials, settings, IDE port files
+  .claude.json                          session config (via CLAUDE_CONFIG_DIR)
+  settings.json
+  ide/
+~/.browserbud/data/            ──►    /home/bb/browse/               (bind mount, read-write)
+  context/, cache/, notes/              Claude Code's working directory
 
 browser → localhost:8989       ──►    server.js (:8989)
                                         ├── HTTP proxy → ttyd (:7682 internal)
@@ -70,43 +75,53 @@ browser → localhost:8989       ──►    server.js (:8989)
 
 All three processes (server.js, tmux+claude, ttyd) run in a single container, managed by `start.sh` exactly as today.
 
+All persistent state lives under `~/.browserbud/` on the host — works on macOS, Linux, and Windows (Docker Desktop expands `~` to `%USERPROFILE%`).
+
 ---
 
 ## Authentication
 
 ### How it works
 
-Claude Code stores OAuth credentials in `~/.claude/.credentials.json` after browser-based login. We mount only the credential file (and optionally settings) into the container — not the entire `~/.claude` directory.
+Claude Code stores OAuth credentials differently per platform:
+- **Linux** (inside the container): `~/.claude/.credentials.json` (a JSON file)
+- **macOS**: macOS Keychain (no file on disk)
+- **Windows**: `~/.claude/.credentials.json`
+
+Since the container runs Linux, credentials are always stored as a file. We use `CLAUDE_CONFIG_DIR` (the official Anthropic pattern from their devcontainer) to keep all Claude config inside a single bind-mounted directory.
 
 ### Auth flow
 
 ```
-1. User runs `claude /login` on their host machine (one-time)
-   → Browser opens, user authenticates with their Claude subscription
-   → Token saved to ~/.claude/.credentials.json (lasts ~1 year)
+1. User runs `docker compose up`
+   → Claude Code starts in the terminal, shows an OAuth login URL
+   → The terminal bridge detects the URL and posts it to the side panel
+   → The extension shows a clickable "Open login page" banner
+   → User clicks the link, authenticates in the browser, pastes the auth code
 
-2. User runs `docker compose up`
-   → Container mounts credential file → /home/bb/.claude/.credentials.json
-   → Claude Code inside container reads it, skips login wizard
-   → No login needed, uses host's subscription
+2. Credentials saved to ~/.browserbud/claude-config/.credentials.json
+   → Persists across container restarts (bind mount)
+   → Refresh token handles automatic renewal
+
+3. Subsequent `docker compose up` — already logged in, no prompt
 ```
 
-### Why not mount all of ~/.claude?
+### Why ~/.browserbud instead of ~/.claude?
 
-Mounting the entire `~/.claude` directory causes two problems:
+Using a separate directory avoids conflicts with the host's Claude Code installation:
 
-1. **Project memory bleed**: `~/.claude/projects/` contains per-workspace state keyed by path. The host's Claude Code writes state for `~/browse/`, but the container's Claude Code writes state for `/home/bb/browse/`. These are different paths, so they'd create separate (confusing) project entries — or worse, the container could overwrite host project state.
+1. **No project memory bleed**: `~/.claude/projects/` contains per-workspace state keyed by path. The container's paths (`/home/bb/browse/`) differ from the host's, which would create confusing duplicate entries.
 
-2. **Lock file conflicts**: `~/.claude/ide/` contains MCP lock files. The container's MCP server and the host's IDE plugins (VS Code, JetBrains) would collide here.
+2. **No lock file conflicts**: `~/.claude/ide/` contains MCP lock files. The container's MCP server and host IDE plugins (VS Code, JetBrains) would collide.
 
-**Solution**: Mount only the specific files needed:
+3. **Cross-platform**: `~/.browserbud/` works the same on all OSes. No need to worry about whether the host stores credentials in Keychain vs file.
 
-| Host path | Container path | Mode | Purpose |
-|-----------|---------------|------|---------|
-| `~/.claude/.credentials.json` | `/home/bb/.claude/.credentials.json` | read-only | OAuth token |
-| `~/.claude/settings.json` | `/home/bb/.claude/settings.json` | read-only | User preferences |
-| (none — container-local) | `/home/bb/.claude/ide/` | tmpfs | MCP lock files (ephemeral) |
-| (none — container-local) | `/home/bb/.claude/projects/` | volume | Container's own project memory |
+### Volume layout
+
+| Host path | Container path | Purpose |
+|-----------|---------------|---------|
+| `~/.browserbud/claude-config/` | `/home/bb/.claude/` | All Claude Code state (credentials, settings, IDE port files, projects) |
+| `~/.browserbud/data/` | `/home/bb/browse/` | Claude Code working directory (notes, cache, context) |
 
 ### Future agents
 
@@ -196,57 +211,41 @@ CMD ["bash", "/opt/browserbud/server/start.sh"]
 ```yaml
 services:
   browserbud:
-    image: ghcr.io/browserbud/browserbud:latest  # pre-built image
-    # Or build locally:
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile
+    build: .
+    # Or use pre-built image:
+    # image: ghcr.io/browserbud/browserbud:latest
     ports:
       - "${BROWSERBUD_PORT:-8989}:8989"
     volumes:
-      # Auth: credential file only (read-only, no project memory bleed)
-      - ~/.claude/.credentials.json:/home/bb/.claude/.credentials.json:ro
-      - ~/.claude/settings.json:/home/bb/.claude/settings.json:ro
-
-      # Data: where Claude Code works (notes, cache, context)
-      - ${BROWSERBUD_DATA_DIR:-~/browse}:/home/bb/browse
-
-    # MCP lock files: container-local tmpfs (no host IDE conflicts)
-    tmpfs:
-      - /home/bb/.claude/ide:uid=1000,gid=1000
+      # All BrowserBud state lives under ~/.browserbud on the host.
+      # ~ expands correctly on macOS, Linux, and Windows (Docker Desktop).
+      - ~/.browserbud/claude-config:/home/bb/.claude
+      - ~/.browserbud/data:/home/bb/browse
 
     environment:
+      - CLAUDE_CONFIG_DIR=/home/bb/.claude
       - BROWSERBUD_DATA_DIR=/home/bb/browse
-      - BROWSERBUD_PORT=8989
-      - BROWSERBUD_TTYD_PORT=7682
+      - BROWSERBUD_PORT=${BROWSERBUD_PORT:-8989}
+      - BROWSERBUD_TTYD_PORT=${BROWSERBUD_TTYD_PORT:-7682}
       - BROWSERBUD_LOG_LEVEL=${BROWSERBUD_LOG_LEVEL:-info}
-
-      # Skill API keys (passed from host environment or .env file)
       - SUPADATA_API_KEY=${SUPADATA_API_KEY:-}
       - SCRAPECREATORS_API_KEY=${SCRAPECREATORS_API_KEY:-}
 
-    # Match host user's UID/GID so files in ~/browse are owned correctly
-    user: "${UID:-1000}:${GID:-1000}"
-
-    # tini as PID 1 — forwards signals to start.sh's process tree
     init: true
-
-    # Restart on crash (ttyd/server.js exit)
     restart: unless-stopped
+
+    # Linux only: uncomment and set to your host UID/GID for correct file ownership
+    # user: "${UID:-1000}:${GID:-1000}"
 ```
+
+Key design decisions:
+- **`CLAUDE_CONFIG_DIR`**: Tells Claude Code to store `.claude.json` (session config) inside the mounted directory, so a single bind mount captures all state. This is the same pattern used by Anthropic's official devcontainer.
+- **Bind mounts (not named volumes)**: Files live at `~/.browserbud/` on the host, visible and easy to back up.
+- **No tmpfs**: The `ide/` subdirectory is pre-created in the Dockerfile and persists in the bind mount. Stale lock files are cleaned up by `start.sh`.
 
 ### Linux UID/GID handling
 
-The `user:` directive in docker-compose.yml runs the container process as the host user's UID/GID. This means files created in `~/browse` are owned by the host user, not by a container-internal uid. Users on Linux should export their UID/GID before running:
-
-```bash
-export UID=$(id -u) GID=$(id -g)
-docker compose up
-```
-
-On macOS and Windows (Docker Desktop), file ownership is handled by the VM layer and this is not needed — the default `1000:1000` works.
-
-To make this automatic, the compose file can use an `.env` file:
+On Linux, files created by the container in `~/.browserbud/` will be owned by UID 1000 (the container's `bb` user). If your host user has a different UID, uncomment the `user:` directive in `docker-compose.yml`:
 
 ```bash
 # .env (next to docker-compose.yml)
@@ -254,19 +253,15 @@ UID=1000
 GID=1000
 ```
 
-Users on Linux update these values to match their host user. On macOS/Windows, the defaults work.
+On macOS and Windows (Docker Desktop), file ownership is handled by the VM layer — the default UID 1000 works regardless of host UID.
 
 ### Skill API keys
 
-Skills read API keys from the **repo-root `.env` file**, not from `skills/<name>/.env`. Specifically, `skills/yt-research/config.ts` loads `dotenv` with `path: join(__dirname, "..", "..", ".env")` — resolving to the repo root.
+Skills read API keys from environment variables, which are passed through from docker-compose.yml `environment:`. Users set keys in their host env or in a `.env` file next to `docker-compose.yml`.
 
-In the container, the `.env` file is copied into the image at `/opt/browserbud/.env`. The path resolution works because skills are symlinked from `/home/bb/browse/skills/` → `/opt/browserbud/skills/`, so `../../.env` resolves to `/opt/browserbud/.env`.
-
-However, env vars set in docker-compose.yml `environment:` take precedence over `.env` file values (since `dotenv` doesn't overwrite existing env vars). This gives us the right layering:
-
-1. Compose `environment:` (highest priority — for users who set keys in their host env)
-2. `.env` baked into image (fallback — for keys set at build time)
-3. Empty string (skills degrade gracefully or use alternative fetch methods)
+Layering:
+1. Compose `environment:` (highest priority — for users who set keys in their host env or `.env`)
+2. Empty string (skills degrade gracefully or use alternative fetch methods)
 
 ### What changes in start.sh
 
@@ -277,8 +272,8 @@ However, env vars set in docker-compose.yml `environment:` take precedence over 
 | `ln -sfn "$REPO_DIR/.claude" "$WORK_DIR/.claude"` | Works — symlinks `/opt/browserbud/.claude` → `/home/bb/browse/.claude` | No change needed |
 | `ln -sfn "$REPO_DIR/skills" "$WORK_DIR/skills"` | Works — same pattern | No change needed |
 | `cp "$SCRIPT_DIR/CLAUDE.browse.md" "$WORK_DIR/CLAUDE.md"` | Works | No change needed |
-| `$HOME/.claude/ide/browserbud.port` | Works — `$HOME` is `/home/bb`, `ide/` is a tmpfs | No change needed |
-| Lock file hiding (lines 88-94) | Works — only BrowserBud's lock file exists in the tmpfs | No change needed |
+| `$HOME/.claude/ide/browserbud.port` | Works — `$HOME` is `/home/bb`, `ide/` is in the bind mount | No change needed |
+| Lock file hiding (lines 88-94) | Works — only BrowserBud's lock file exists in the container | No change needed |
 | `node "$SCRIPT_DIR/bridge/build.mjs"` | Skip if pre-built | Optional: add `[ -f bridge/terminal_bridge.built.js ] && exit 0` guard in build.mjs |
 
 **Verdict**: `start.sh` should work unchanged inside the container.
@@ -319,7 +314,7 @@ In Docker, `BROWSERBUD_DATA_DIR` is always set via compose `environment:`, so th
 
 **Canonical path: run everything from PowerShell.**
 
-Both `claude /login` and `docker compose up` must run in the **same environment** so `~/.claude` resolves to the same directory. On Windows, `~` means different things depending on the shell:
+On Windows, `~` means different things depending on the shell:
 
 | Shell | `~` resolves to |
 |-------|----------------|
@@ -328,24 +323,19 @@ Both `claude /login` and `docker compose up` must run in the **same environment*
 | Git Bash | `/c/Users/<name>` |
 | WSL | `/home/<name>` (different filesystem!) |
 
-**If `claude /login` runs in PowerShell but `docker compose up` runs in WSL, the credential file is on a different filesystem and the container won't find it.**
-
-Standardized Windows instructions:
+Since credentials are stored in `~/.browserbud/` (written by the container, not the host), there's no cross-shell credential mismatch issue. Just run `docker compose up` from whichever shell you prefer.
 
 ```powershell
-# All commands in PowerShell
-
-# 1. Install Claude Code and authenticate
-irm https://claude.ai/install.ps1 | iex
-claude /login
-
-# 2. Start BrowserBud (Docker Desktop must be running)
+# PowerShell (Docker Desktop must be running)
+git clone https://github.com/animeshjain/browserbud.git
+cd browserbud
 docker compose up
+# First run: authenticate via the login URL shown in the terminal
 ```
 
-Docker Desktop on Windows translates PowerShell paths to container paths correctly. The `~/.claude/.credentials.json` mount resolves to `C:\Users\<name>\.claude\.credentials.json` → bind-mounted into the container.
+Docker Desktop on Windows translates paths correctly. `~/.browserbud/` resolves to `C:\Users\<name>\.browserbud\`.
 
-**Alternative**: WSL end-to-end (install Claude Code in WSL, run `docker compose up` from WSL). This also works but is a different path — users must pick one and stick with it.
+**Alternative**: WSL end-to-end (clone and run from WSL). Also works — `~/.browserbud/` will be on the WSL filesystem.
 
 ---
 
@@ -359,18 +349,14 @@ Docker Desktop on Windows translates PowerShell paths to container paths correct
 #    Windows: Download from docker.com (includes WSL2 backend)
 #    Linux: apt/dnf install docker.io docker-compose-v2
 
-# 2. Install Claude Code CLI and authenticate (one-time)
-#    macOS/Linux:
-curl -fsSL https://claude.ai/install.sh | bash
-claude /login
-#    Windows (PowerShell):
-#    irm https://claude.ai/install.ps1 | iex
-#    claude /login
-
-# 3. Create a docker-compose.yml (or clone the repo)
-curl -fsSL https://raw.githubusercontent.com/browserbud/browserbud/main/docker-compose.yml \
-  -o docker-compose.yml
+# 2. Clone and start
+git clone https://github.com/animeshjain/browserbud.git
+cd browserbud
 docker compose up
+
+# 3. First run: Claude Code shows a login URL in the terminal.
+#    The extension detects it and shows a clickable banner.
+#    Authenticate once — credentials persist in ~/.browserbud/
 
 # 4. Install the browser extension
 #    Firefox: setup script auto-installs signed .xpi (zero clicks)
@@ -389,8 +375,11 @@ docker compose up        # or: docker compose up -d (background)
 ### Updating
 
 ```bash
-docker compose pull      # pull latest pre-built image
+git pull                 # get latest compose + Dockerfile
+docker compose build     # rebuild image
 docker compose up
+# Or with pre-built images:
+# docker compose pull && docker compose up
 ```
 
 ---
@@ -445,6 +434,12 @@ Including devDependencies adds ~20-30 MB (esbuild, tsx, typescript). This is acc
 
 3. **Auto-restart behavior**: `restart: unless-stopped` means if Claude Code crashes or user Ctrl+C's inside tmux, the whole container restarts. Alternative: `restart: no` and let users manually restart. Recommendation: `unless-stopped` for now — a crash should self-heal; explicit stop (`docker compose down`) still works.
 
-4. **`.env` file shipping**: The root `.env` contains API keys (gitignored). The Dockerfile `COPY .env* /opt/browserbud/` copies it if present. For the pre-built image, API keys should come from compose `environment:` only — the image should not bake in keys. Need a `.env.example` for documentation.
+## Resolved Decisions
 
-5. **`user:` directive and tmpfs**: The `user:` override in compose runs the process as the host UID, but the Dockerfile creates user `bb` with UID 1000. If the host UID differs, the container user won't match the homedir owner. Options: (a) use an entrypoint script that creates the user dynamically, (b) accept the mismatch (process runs as host UID, homedir owned by 1000 — most operations still work), (c) always run as 1000 and accept Linux file ownership quirks. Needs testing.
+- **Authentication**: In-container OAuth flow with `CLAUDE_CONFIG_DIR` + bind mount to `~/.browserbud/claude-config/`. No host-side `claude /login` needed. Terminal bridge detects auth URLs and surfaces them in the extension's side panel.
+
+- **Data directory**: `~/.browserbud/data/` replaces `~/browse/`. All BrowserBud state is consolidated under `~/.browserbud/`.
+
+- **tmpfs removed**: Caused root-ownership permission issues. The `ide/` directory is pre-created in the Dockerfile and lives in the bind mount.
+
+- **UID/GID**: Default UID 1000 works on macOS/Windows. Linux users uncomment `user:` directive in compose. No dynamic user creation needed.

@@ -4,16 +4,18 @@ services:
     ports:
       - "${BROWSERBUD_PORT:-8989}:8989"
     volumes:
-      # Auth: credential file only (read-only — no project memory bleed)
-      - ~/.claude/.credentials.json:/home/bb/.claude/.credentials.json:ro
+      # All BrowserBud state lives under ~/.browserbud on the host.
+      # ~ expands correctly on macOS, Linux, and Windows (Docker Desktop).
 
-      # Uncomment if you have custom Claude Code settings:
-      # - ~/.claude/settings.json:/home/bb/.claude/settings.json:ro
+      # Claude Code config & credentials — persists /login auth across restarts.
+      # On first run: authenticate via the OAuth flow shown in the terminal.
+      - ~/.browserbud/claude-config:/home/bb/.claude
 
       # Data directory: where Claude Code works (notes, cache, context)
-      - ${BROWSERBUD_DATA_DIR:-~/browse}:/home/bb/browse
+      - ~/.browserbud/data:/home/bb/browse
 
     environment:
+      - CLAUDE_CONFIG_DIR=/home/bb/.claude
       - BROWSERBUD_DATA_DIR=/home/bb/browse
       - BROWSERBUD_PORT=${BROWSERBUD_PORT:-8989}
       - BROWSERBUD_TTYD_PORT=${BROWSERBUD_TTYD_PORT:-7682}

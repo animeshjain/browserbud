@@ -77,12 +77,80 @@ const deps: BridgeDeps = {
 
 // ─── WebSocket capture ──────────────────────────────────────────────────────
 
+// ─── OAuth URL detection ─────────────────────────────────────────────────
+
+// Buffer terminal output to detect long URLs that span multiple lines.
+// ttyd sends output in small chunks; a single URL may arrive across
+// several WebSocket messages. We accumulate text, scan for URLs, and
+// post them to the parent frame (extension side panel).
+let outputBuffer = "";
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+const URL_FLUSH_DELAY = 300; // ms — wait for all chunks of a wrapped line
+
+const AUTH_URL_RE = /https:\/\/(?:claude\.com|claude\.ai|accounts\.anthropic\.com|console\.anthropic\.com)\S+/g;
+
+function scanForAuthUrls(text: string): void {
+  const matches = text.match(AUTH_URL_RE);
+  if (!matches) return;
+  for (const raw of matches) {
+    // Strip trailing punctuation/ANSI artifacts that aren't part of the URL
+    const url = raw.replace(/[\s\x00-\x1f]+/g, "").replace(/[)>\]]+$/, "");
+    if (url.length < 30) continue; // too short to be a real auth URL
+    console.log("[BrowserBud] Detected auth URL:", url);
+    window.parent.postMessage(
+      { type: "browserbud:auth-url", url },
+      "*",
+    );
+  }
+}
+
+function processOutputBytes(data: Uint8Array): void {
+  // ttyd binary protocol: first byte is command type
+  // 0x30 = '0' = CMD_OUTPUT (terminal output data)
+  if (data.length < 2 || data[0] !== 0x30) return;
+
+  // Decode the payload (skip command byte)
+  const text = new TextDecoder().decode(data.subarray(1));
+
+  // Strip ANSI escape sequences and control characters so URLs that
+  // wrap across terminal lines become continuous in the buffer.
+  const clean = text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+                     .replace(/\x1b\][^\x07]*\x07/g, "")
+                     .replace(/[\x00-\x1f]/g, "");
+  outputBuffer += clean;
+
+  // Debounce: wait for all chunks of a wrapped URL to arrive
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = setTimeout(() => {
+    scanForAuthUrls(outputBuffer);
+    // Keep only the tail in case a URL straddles the flush boundary
+    outputBuffer = outputBuffer.length > 500
+      ? outputBuffer.slice(-500)
+      : "";
+  }, URL_FLUSH_DELAY);
+}
+
+function onTerminalOutput(data: any): void {
+  if (data instanceof ArrayBuffer) {
+    processOutputBytes(new Uint8Array(data));
+  } else if (data instanceof Blob) {
+    // Some browsers deliver WebSocket binary as Blob by default
+    data.arrayBuffer().then((buf: ArrayBuffer) => {
+      processOutputBytes(new Uint8Array(buf));
+    });
+  }
+}
+
 class BrowserBudWebSocket extends NativeWebSocket {
   constructor(url: string | URL, protocols?: string | string[]) {
     super(url, protocols);
     if (url.toString().includes("/ws")) {
       state.ttydSocket = this;
       console.log("[BrowserBud] Captured ttyd WebSocket");
+      // Listen for terminal output to detect auth URLs
+      this.addEventListener("message", (event: MessageEvent) => {
+        onTerminalOutput(event.data);
+      });
       this.addEventListener("close", () => {
         if (state.ttydSocket === this) state.ttydSocket = null;
       });

@@ -12,8 +12,8 @@ BrowserBud puts Claude Code in a browser side panel and feeds it context about w
 browse, the context of the page is automatically sent to claude code. No copy-pasting URLs, no tab-switching to a 
 chat window.
 
-Everything BrowserBud produces - summaries, notes, transcripts - goes to a local folder (`~/browse/`) on your
-machine. Since Claude Code runs in that same folder, it can reference past research. Ask it to compare things you
+Everything BrowserBud produces - summaries, notes, transcripts - goes to a local folder (`~/.browserbud/data/`) on
+your machine. Since Claude Code runs in that same folder, it can reference past research. Ask it to compare things you
 looked at last week, pull together notes from different sessions, or build on previous summaries. Your research
 compounds instead of disappearing into a chat log.
 
@@ -28,7 +28,7 @@ works on any page. More site-specific integrations are coming.
 
 - Runs Claude Code in a browser side panel via a terminal (ttyd)
 - Pushes your current page context (title, URL, selected text) to Claude Code in real time
-- Saves all output (summaries, notes, analysis) to `~/browse/` - a local folder Claude Code can read back later
+- Saves all output (summaries, notes, analysis) to `~/.browserbud/data/` - a local folder Claude Code can read back later
 - Works on any page: ask about articles, docs, forum threads, whatever you're reading
 - On YouTube: extracts transcripts, captures video frames, reads comments
 - Skills system: domain-specific CLI tools Claude Code can call on its own (YouTube research is the first)
@@ -52,21 +52,24 @@ and the browser.
 
 Docker is the recommended setup — works on macOS, Linux, and Windows with a single command.
 
-**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or [Podman Desktop](https://podman-desktop.io/)) and [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/overview).
+**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or [Podman Desktop](https://podman-desktop.io/)).
 
 ```bash
-# 1. Authenticate Claude Code (one-time)
-claude /login
-
-# 2. Clone and start
+# Clone and start
 git clone https://github.com/animeshjain/browserbud.git
 cd browserbud
 docker compose up
 ```
 
+On first run, Claude Code will show a login URL in the terminal. The extension detects it and shows a clickable banner — authenticate once and you're set. Credentials persist in `~/.browserbud/` across restarts.
+
 Install the browser extension, open any webpage, click the BrowserBud icon — Claude Code appears in the side panel connected to `http://localhost:8989`.
 
-Your data lives in `~/browse/` on your host machine. See [docs/docker-setup.md](docs/docker-setup.md) for details on volumes, API keys, and platform-specific notes.
+All data lives in `~/.browserbud/` on your host machine:
+- `~/.browserbud/claude-config/` — Claude Code credentials and settings
+- `~/.browserbud/data/` — notes, cache, context (Claude Code's working directory)
+
+See [docs/docker-setup.md](docs/docker-setup.md) for details on volumes, API keys, and platform-specific notes.
 
 ## Setup (Native)
 

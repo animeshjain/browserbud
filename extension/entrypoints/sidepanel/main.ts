@@ -16,6 +16,9 @@ const settingsCancel = document.getElementById("settings-cancel") as HTMLButtonE
 const helpBtn = document.getElementById("help-btn") as HTMLButtonElement;
 const helpOverlay = document.getElementById("help-overlay") as HTMLDivElement;
 const helpClose = document.getElementById("help-close") as HTMLButtonElement;
+const authBanner = document.getElementById("auth-banner") as HTMLDivElement;
+const authLink = document.getElementById("auth-link") as HTMLAnchorElement;
+const authDismiss = document.getElementById("auth-dismiss") as HTMLButtonElement;
 
 function normalizeUrl(raw: string): string {
   let url = raw.trim();
@@ -467,6 +470,25 @@ helpOverlay.addEventListener("click", (e) => {
   if (e.target === helpOverlay) {
     helpOverlay.classList.remove("visible");
   }
+});
+
+// ─── Auth URL detection (from terminal bridge via postMessage) ───────────────
+
+// Track the last auth URL to avoid showing duplicates
+let lastAuthUrl = "";
+
+window.addEventListener("message", (event) => {
+  if (!event.data || event.data.type !== "browserbud:auth-url") return;
+  const url = event.data.url;
+  if (!url || url === lastAuthUrl) return;
+  lastAuthUrl = url;
+  authLink.href = url;
+  authLink.textContent = "Open login page";
+  authBanner.style.display = "flex";
+});
+
+authDismiss.addEventListener("click", () => {
+  authBanner.style.display = "none";
 });
 
 // ─── Message listener (results from content scripts + typeInTerminal) ────────

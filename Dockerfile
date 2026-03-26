@@ -1,5 +1,9 @@
 FROM node:20-bookworm-slim
 
+# ─── UTF-8 locale (needed for Claude Code's Unicode UI: logo, prompt, borders)
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
 # ─── System dependencies ────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl tmux jq ripgrep ca-certificates \
