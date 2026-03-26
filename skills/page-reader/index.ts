@@ -1,8 +1,10 @@
 import { join } from "node:path";
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 
-const BROWSERBUD_PORT = process.env.BROWSERBUD_PORT || "8989";
-const SERVER_URL = `http://localhost:${BROWSERBUD_PORT}`;
+if (!process.env.BROWSERBUD_PORT) {
+  throw new Error("BROWSERBUD_PORT environment variable is not set");
+}
+const SERVER_URL = `http://localhost:${process.env.BROWSERBUD_PORT}`;
 const DATA_DIR = process.env.BROWSERBUD_DATA_DIR || join(process.env.HOME || "~", "browse");
 const CONTEXT_DIR = join(DATA_DIR, "context");
 

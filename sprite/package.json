@@ -5,7 +5,9 @@
   "scripts": {
     "build:bridge": "node bridge/build.mjs",
     "test:bridge": "vitest run bridge/bridge_core.test.ts",
-    "test:bridge:watch": "vitest bridge/bridge_core.test.ts"
+    "test:bridge:watch": "vitest bridge/bridge_core.test.ts",
+    "test:session": "vitest run session.test.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "http-proxy": "^1.18.1",

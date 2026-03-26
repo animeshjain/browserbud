@@ -62,17 +62,28 @@ export default defineContentScript({
 
     // ─── Message handling ─────────────────────────────────────────────────────
 
+    const CAPABILITIES = ["getContext", "getPageContent"];
+
     browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.type === "getContext") {
         sendResponse(getContext());
       } else if (message.type === "getPageContent") {
         sendResponse(getPageContent());
+      } else if (message.type === "getCapabilities") {
+        sendResponse({ capabilities: CAPABILITIES, url: window.location.href });
       }
     });
 
     // ─── Initial context send ─────────────────────────────────────────────────
 
     sendContext();
+
+    // Announce capabilities
+    browser.runtime.sendMessage({
+      type: "contentScriptReady",
+      capabilities: ["getContext", "getPageContent"],
+      url: window.location.href,
+    }).catch(() => {}); // side panel may not be open yet
 
     // ─── Selection tracking ───────────────────────────────────────────────────
 

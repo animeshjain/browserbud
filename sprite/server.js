@@ -284,15 +284,40 @@ function broadcastSelection(context) {
 let extensionWs = null;
 const pendingRequests = new Map(); // requestId -> { resolve, reject, timer }
 
+// Session state — tracks the connected panel's capabilities
+const session = {
+  panelConnected: false,
+  activeTabId: null,
+  activeTabUrl: null,
+  capabilities: [],
+};
+
 const extensionWss = new WebSocketServer({ noServer: true });
 
 extensionWss.on("connection", (ws) => {
-  log.info("extension connected");
+  log.info("panel connected");
   extensionWs = ws;
+  session.panelConnected = true;
 
   ws.on("message", (data) => {
     try {
       const msg = JSON.parse(data);
+
+      // Heartbeat
+      if (msg.type === "ping") {
+        ws.send(JSON.stringify({ type: "pong" }));
+        return;
+      }
+
+      // Session updates from the side panel
+      if (msg.type === "panel-hello" || msg.type === "session-update") {
+        if (msg.activeTabId != null) session.activeTabId = msg.activeTabId;
+        if (msg.activeTabUrl != null) session.activeTabUrl = msg.activeTabUrl;
+        if (msg.capabilities != null) session.capabilities = msg.capabilities;
+        log.info({ session }, "session updated");
+        return;
+      }
+
       log.debug({ type: msg.type }, "extension message received");
       if ((msg.type === "extract-transcript-result" || msg.type === "extract-comments-result" || msg.type === "player-state-result" || msg.type === "page-content-result") && msg.requestId) {
         const pending = pendingRequests.get(msg.requestId);
@@ -308,12 +333,18 @@ extensionWss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
-    log.info("extension disconnected");
-    if (extensionWs === ws) extensionWs = null;
+    log.info("panel disconnected");
+    if (extensionWs === ws) {
+      extensionWs = null;
+      session.panelConnected = false;
+      session.activeTabId = null;
+      session.activeTabUrl = null;
+      session.capabilities = [];
+    }
     // Reject all pending requests
     for (const [id, pending] of pendingRequests) {
       clearTimeout(pending.timer);
-      pending.reject(new Error("Extension disconnected"));
+      pending.reject(new Error("Panel disconnected"));
       pendingRequests.delete(id);
     }
   });
@@ -344,7 +375,7 @@ function waitForExtension(timeoutMs) {
       }
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
-        reject(new Error("Extension not connected (timed out waiting)"));
+        reject(new Error("no_active_panel_session: BrowserBud side panel is not open. Open it in Chrome to use browser commands."));
         return;
       }
       delay = Math.min(delay * 2, remaining, 4000); // cap at 4s
@@ -453,9 +484,10 @@ function handleExtractTranscript(req, res) {
         res.end(JSON.stringify({ ok: false, error: result.error || "Extraction failed" }));
       }
     } catch (err) {
+      const isNoPanel = err.message.includes("no_active_panel_session");
       log.error({ err: err.message }, "extract-transcript error");
-      res.writeHead(502, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: false, error: err.message }));
+      res.writeHead(isNoPanel ? 503 : 502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message, code: isNoPanel ? "no_active_panel_session" : "extension_error" }));
     }
   });
 }
@@ -559,9 +591,10 @@ function handleExtractComments(req, res) {
         res.end(JSON.stringify({ ok: false, error: result.error || "Extraction failed" }));
       }
     } catch (err) {
+      const isNoPanel = err.message.includes("no_active_panel_session");
       log.error({ err: err.message }, "extract-comments error");
-      res.writeHead(502, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: false, error: err.message }));
+      res.writeHead(isNoPanel ? 503 : 502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message, code: isNoPanel ? "no_active_panel_session" : "extension_error" }));
     }
   });
 }
@@ -603,9 +636,10 @@ function handleExtractPageContent(req, res) {
         res.end(JSON.stringify({ ok: false, error: result.error || "Extraction failed" }));
       }
     } catch (err) {
+      const isNoPanel = err.message.includes("no_active_panel_session");
       log.error({ err: err.message }, "extract-page-content error");
-      res.writeHead(502, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: false, error: err.message }));
+      res.writeHead(isNoPanel ? 503 : 502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message, code: isNoPanel ? "no_active_panel_session" : "extension_error" }));
     }
   });
 }
@@ -653,9 +687,10 @@ function handleGetPlayerState(req, res) {
         res.end(JSON.stringify({ ok: false, error: result.error || "Failed to get player state" }));
       }
     } catch (err) {
+      const isNoPanel = err.message.includes("no_active_panel_session");
       log.error({ err: err.message }, "player-state error");
-      res.writeHead(502, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: false, error: err.message }));
+      res.writeHead(isNoPanel ? 503 : 502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message, code: isNoPanel ? "no_active_panel_session" : "extension_error" }));
     }
   });
 }
@@ -1000,6 +1035,17 @@ const server = http.createServer((req, res) => {
 
   if (req.url === "/api/bridge-log") {
     return handleBridgeLog(req, res);
+  }
+
+  if (req.url === "/api/session") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      panelConnected: session.panelConnected,
+      activeTabUrl: session.activeTabUrl,
+      capabilities: session.capabilities,
+    }));
+    log.info({ url: req.url, ms: Date.now() - reqStart }, "http request");
+    return;
   }
 
   // Serve the bridge script

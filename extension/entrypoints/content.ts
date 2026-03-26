@@ -158,10 +158,44 @@ export default defineContentScript({
       }
     }
 
-    // Respond to messages from the background worker
+    function getPageContent() {
+      // On watch pages, extract the video description
+      const descEl = document.querySelector(
+        "#description-inline-expander, ytd-text-inline-expander, ytd-expander[id='description']",
+      );
+      if (descEl) {
+        return {
+          content: descEl.textContent?.trim() || "",
+          title: document.title.replace(/ - YouTube$/, "").trim(),
+          url: window.location.href,
+        };
+      }
+
+      // Fallback: clone body and strip non-content elements
+      const clone = document.body.cloneNode(true) as HTMLElement;
+      for (const tag of ["script", "style", "nav", "header", "footer", "aside", "noscript"]) {
+        for (const el of clone.querySelectorAll(tag)) {
+          el.remove();
+        }
+      }
+
+      return {
+        content: clone.textContent?.trim() || "",
+        title: document.title.replace(/ - YouTube$/, "").trim(),
+        url: window.location.href,
+      };
+    }
+
+    const CAPABILITIES = ["getContext", "extractTranscript", "extractComments", "getPlayerState", "getPageContent"];
+
+    // Respond to messages from the side panel / background worker
     browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-      if (message.type === "getContext") {
+      if (message.type === "getCapabilities") {
+        sendResponse({ capabilities: CAPABILITIES, url: window.location.href });
+      } else if (message.type === "getContext") {
         sendResponse(getContext());
+      } else if (message.type === "getPageContent") {
+        sendResponse(getPageContent());
       } else if (message.type === "extractTranscript") {
         // Forward to MAIN world script via postMessage
         window.postMessage(
@@ -223,6 +257,13 @@ export default defineContentScript({
     if (window.location.href.includes("/watch")) {
       setTimeout(injectCaptureButton, 1500);
     }
+
+    // Announce capabilities
+    browser.runtime.sendMessage({
+      type: "contentScriptReady",
+      capabilities: ["getContext", "extractTranscript", "extractComments", "getPlayerState", "getPageContent"],
+      url: window.location.href,
+    }).catch(() => {}); // side panel may not be open yet
 
     // Listen for messages from MAIN world content script
     window.addEventListener("message", (event) => {
