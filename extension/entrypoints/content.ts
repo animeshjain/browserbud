@@ -1,3 +1,5 @@
+import { extractPageContent } from "../lib/extract-page";
+
 export default defineContentScript({
   matches: ["*://*.youtube.com/*"],
   runAt: "document_idle",
@@ -159,31 +161,7 @@ export default defineContentScript({
     }
 
     function getPageContent() {
-      // On watch pages, extract the video description
-      const descEl = document.querySelector(
-        "#description-inline-expander, ytd-text-inline-expander, ytd-expander[id='description']",
-      );
-      if (descEl) {
-        return {
-          content: descEl.textContent?.trim() || "",
-          title: document.title.replace(/ - YouTube$/, "").trim(),
-          url: window.location.href,
-        };
-      }
-
-      // Fallback: clone body and strip non-content elements
-      const clone = document.body.cloneNode(true) as HTMLElement;
-      for (const tag of ["script", "style", "nav", "header", "footer", "aside", "noscript"]) {
-        for (const el of clone.querySelectorAll(tag)) {
-          el.remove();
-        }
-      }
-
-      return {
-        content: clone.textContent?.trim() || "",
-        title: document.title.replace(/ - YouTube$/, "").trim(),
-        url: window.location.href,
-      };
+      return extractPageContent();
     }
 
     const CAPABILITIES = ["getContext", "extractTranscript", "extractComments", "getPlayerState", "getPageContent"];
@@ -192,10 +170,13 @@ export default defineContentScript({
     browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.type === "getCapabilities") {
         sendResponse({ capabilities: CAPABILITIES, url: window.location.href });
+        return true;
       } else if (message.type === "getContext") {
         sendResponse(getContext());
+        return true;
       } else if (message.type === "getPageContent") {
         sendResponse(getPageContent());
+        return true;
       } else if (message.type === "extractTranscript") {
         // Forward to MAIN world script via postMessage
         window.postMessage(
@@ -240,6 +221,14 @@ export default defineContentScript({
     }, 5000);
     // Initial request after MAIN world script loads
     setTimeout(requestPlayerTime, 2000);
+
+    // When the user switches back to this tab, re-push context so the server
+    // reflects this tab (another tab's context may have been sent in between).
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        sendContext();
+      }
+    });
 
     // YouTube fires this custom event on SPA navigation
     document.addEventListener("yt-navigate-finish", () => {

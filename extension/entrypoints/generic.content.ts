@@ -1,3 +1,5 @@
+import { extractPageContent } from "../lib/extract-page";
+
 export default defineContentScript({
   matches: ["<all_urls>"],
   excludeMatches: ["*://*.youtube.com/*"],
@@ -35,29 +37,7 @@ export default defineContentScript({
     }
 
     function getPageContent() {
-      // Try semantic elements first
-      const semantic = document.querySelector("article, main, [role='main']");
-      if (semantic) {
-        return {
-          content: semantic.textContent?.trim() || "",
-          title: document.title.trim(),
-          url: window.location.href,
-        };
-      }
-
-      // Fallback: clone body and strip non-content elements
-      const clone = document.body.cloneNode(true) as HTMLElement;
-      for (const tag of ["script", "style", "nav", "header", "footer", "aside", "noscript"]) {
-        for (const el of clone.querySelectorAll(tag)) {
-          el.remove();
-        }
-      }
-
-      return {
-        content: clone.textContent?.trim() || "",
-        title: document.title.trim(),
-        url: window.location.href,
-      };
+      return extractPageContent();
     }
 
     // ─── Message handling ─────────────────────────────────────────────────────
@@ -67,10 +47,13 @@ export default defineContentScript({
     browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.type === "getContext") {
         sendResponse(getContext());
+        return true;
       } else if (message.type === "getPageContent") {
         sendResponse(getPageContent());
+        return true;
       } else if (message.type === "getCapabilities") {
         sendResponse({ capabilities: CAPABILITIES, url: window.location.href });
+        return true;
       }
     });
 
@@ -120,7 +103,11 @@ export default defineContentScript({
 
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") {
-        sendContext();
+        // Always re-push context on tab switch — another tab's context may have
+        // been sent to the server in between, so bypass the dedup check.
+        const ctx = getContext();
+        lastContextJson = JSON.stringify(ctx);
+        browser.runtime.sendMessage({ type: "context", data: ctx });
       }
     });
 

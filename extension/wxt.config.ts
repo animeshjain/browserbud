@@ -11,6 +11,7 @@ export default defineConfig({
       "activeTab",
       "tabs",
       "storage",
+      "scripting",
       ...(browser === "chrome" ? ["sidePanel" as const] : []),
     ],
     host_permissions: ["<all_urls>"],

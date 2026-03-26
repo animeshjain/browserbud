@@ -12,11 +12,15 @@ async function getServerUrl(): Promise<string> {
 
 async function sendContext(data: Record<string, string>) {
   const serverUrl = await getServerUrl();
-  fetch(`${serverUrl}/api/context`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  }).catch((err) => console.error("BrowserBud: failed to send context", err));
+  try {
+    await fetch(`${serverUrl}/api/context`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+  } catch (err) {
+    console.error("BrowserBud: failed to send context", err);
+  }
 }
 
 async function sendTranscript(data: {
@@ -102,17 +106,17 @@ export default defineBackground(() => {
         type: "getContext",
       });
       if (response) {
-        sendContext(response);
+        await sendContext(response);
       }
     } catch {
       // No content script on this tab — clear context
-      sendContext({});
+      await sendContext({});
     }
   }
 
   // When the user switches tabs, update context
   browser.tabs.onActivated.addListener(async ({ tabId }) => {
-    refreshContextForTab(tabId);
+    await refreshContextForTab(tabId);
   });
 
   // When a browser window gains focus, update context for its active tab
@@ -121,7 +125,7 @@ export default defineBackground(() => {
     if (windowId === browser.windows.WINDOW_ID_NONE) return;
     const [tab] = await browser.tabs.query({ active: true, windowId });
     if (tab?.id) {
-      refreshContextForTab(tab.id);
+      await refreshContextForTab(tab.id);
     }
   });
 
