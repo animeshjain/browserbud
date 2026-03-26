@@ -5,6 +5,7 @@ const httpProxy = require("http-proxy");
 const { WebSocketServer } = require("ws");
 const { v4: uuidv4 } = require("uuid");
 const { execSync } = require("child_process");
+const os = require("os");
 const pino = require("pino");
 
 // ─── Logging ────────────────────────────────────────────────────────────────
@@ -26,7 +27,7 @@ const log = pino({
 const startTime = Date.now();
 const TTYD_PORT = parseInt(process.env.BROWSERBUD_TTYD_PORT, 10);
 const PROXY_PORT = parseInt(process.env.BROWSERBUD_PORT, 10);
-const DATA_DIR = process.env.BROWSERBUD_DATA_DIR || path.join(process.env.HOME, "browse");
+const DATA_DIR = process.env.BROWSERBUD_DATA_DIR || path.join(os.homedir(), "browse");
 const CONTEXT_DIR = path.join(DATA_DIR, "context");
 const CONTEXT_FILE = path.join(CONTEXT_DIR, "current.json");
 const CACHE_DIR = path.join(DATA_DIR, "cache", "youtube");
@@ -48,7 +49,7 @@ const BRIDGE_SCRIPT = fs.readFileSync(BRIDGE_BUILT_PATH, "utf-8");
 
 // ─── IDE MCP WebSocket Server ───────────────────────────────────────────────
 
-const IDE_DIR = path.join(process.env.HOME, ".claude", "ide");
+const IDE_DIR = path.join(os.homedir(), ".claude", "ide");
 const authToken = uuidv4();
 let mcpPort = null;
 const connectedClients = new Set();

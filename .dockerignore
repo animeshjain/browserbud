@@ -1,0 +1,35 @@
+# Dependencies (reinstalled inside container)
+node_modules/
+
+# Git
+.git/
+.gitignore
+
+# Extension (not needed in container — runs in browser)
+extension/
+
+# Documentation (not needed at runtime)
+docs/
+README.md
+LICENSE
+
+# Secrets (must NOT be baked into image layers — use compose environment: instead)
+.env
+skills/*/.env
+
+# Build artifacts
+dist/
+.wxt/
+.output/
+server/bridge/*.built.js
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker files (no need to copy themselves — except entrypoint.sh which is COPY'd)
+Dockerfile
+docker-compose.yml
+.dockerignore

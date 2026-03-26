@@ -1,0 +1,33 @@
+services:
+  browserbud:
+    build: .
+    ports:
+      - "${BROWSERBUD_PORT:-8989}:8989"
+    volumes:
+      # Auth: credential file only (read-only — no project memory bleed)
+      - ~/.claude/.credentials.json:/home/bb/.claude/.credentials.json:ro
+
+      # Uncomment if you have custom Claude Code settings:
+      # - ~/.claude/settings.json:/home/bb/.claude/settings.json:ro
+
+      # Data directory: where Claude Code works (notes, cache, context)
+      - ${BROWSERBUD_DATA_DIR:-~/browse}:/home/bb/browse
+
+    environment:
+      - BROWSERBUD_DATA_DIR=/home/bb/browse
+      - BROWSERBUD_PORT=${BROWSERBUD_PORT:-8989}
+      - BROWSERBUD_TTYD_PORT=${BROWSERBUD_TTYD_PORT:-7682}
+      - BROWSERBUD_LOG_LEVEL=${BROWSERBUD_LOG_LEVEL:-info}
+
+      # Skill API keys (optional — set in host env or .env file next to this file)
+      - SUPADATA_API_KEY=${SUPADATA_API_KEY:-}
+      - SCRAPECREATORS_API_KEY=${SCRAPECREATORS_API_KEY:-}
+
+    # tini as PID 1 — forwards signals to start.sh's multi-process tree
+    init: true
+
+    # Self-heal on crash; explicit `docker compose down` still stops cleanly
+    restart: unless-stopped
+
+    # Linux only: uncomment and set to your host UID/GID for correct file ownership
+    # user: "${UID:-1000}:${GID:-1000}"

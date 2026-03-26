@@ -48,15 +48,37 @@ and the browser.
 
 [CLAUDE.md](CLAUDE.md) has the full architecture. [docs/](docs/) has deep dives on specific subsystems.
 
-## Prerequisites
+## Quick Start (Docker)
+
+Docker is the recommended setup — works on macOS, Linux, and Windows with a single command.
+
+**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or [Podman Desktop](https://podman-desktop.io/)) and [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/overview).
+
+```bash
+# 1. Authenticate Claude Code (one-time)
+claude /login
+
+# 2. Clone and start
+git clone https://github.com/animeshjain/browserbud.git
+cd browserbud
+docker compose up
+```
+
+Install the browser extension, open any webpage, click the BrowserBud icon — Claude Code appears in the side panel connected to `http://localhost:8989`.
+
+Your data lives in `~/browse/` on your host machine. See [docs/docker-setup.md](docs/docker-setup.md) for details on volumes, API keys, and platform-specific notes.
+
+## Setup (Native)
+
+If you prefer running without Docker:
+
+### Prerequisites
 
 - [Node.js](https://nodejs.org/) v20+
 - [ttyd](https://github.com/tsl0922/ttyd#installation)
 - [tmux](https://github.com/tmux/tmux#installation)
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/overview)
 - Chrome or Firefox
-
-## Setup
 
 ```bash
 git clone https://github.com/animeshjain/browserbud.git
