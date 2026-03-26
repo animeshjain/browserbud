@@ -106,6 +106,9 @@ tmux -L "$TMUX_SOCKET" set-window-option -t "$TMUX_SESSION" alternate-screen off
 # Override WheelUpPane to always enter copy-mode instead of forwarding
 # wheel events to the app (which causes Claude Code to cycle history).
 # copy-mode -e auto-exits when the user scrolls back to the bottom.
+# Low escape-time so the bridge's ESC-then-paste delay (50ms) works reliably.
+# Default is 500ms which would require a much longer (sluggish) delay.
+tmux -L "$TMUX_SOCKET" set-option -s escape-time 10
 tmux -L "$TMUX_SOCKET" set-option -t "$TMUX_SESSION" mouse on
 tmux -L "$TMUX_SOCKET" bind -T root WheelUpPane if-shell -Ft= '#{pane_in_mode}' 'send-keys -M' 'copy-mode -e'
 tmux -L "$TMUX_SOCKET" bind -T root WheelDownPane if-shell -Ft= '#{pane_in_mode}' 'send-keys -M' ''
@@ -115,14 +118,30 @@ tmux -L "$TMUX_SOCKET" unbind -T root MouseDown3Pane 2>/dev/null || true
 tmux -L "$TMUX_SOCKET" unbind -T copy-mode MouseDown3Pane 2>/dev/null || true
 tmux -L "$TMUX_SOCKET" unbind -T copy-mode-vi MouseDown3Pane 2>/dev/null || true
 
+bind_copy_mode_passthrough_key() {
+  local key="$1"
+  tmux -L "$TMUX_SOCKET" bind -T copy-mode "$key" send-keys -X cancel \\\; send-keys
+  tmux -L "$TMUX_SOCKET" bind -T copy-mode-vi "$key" send-keys -X cancel \\\; send-keys
+}
+
+# In copy-mode, normal typing should drop the selection and resume input in
+# Claude Code instead of being interpreted as copy-mode navigation/search.
+for key in {a..z} {A..Z} {0..9}; do
+  bind_copy_mode_passthrough_key "$key"
+done
+bind_copy_mode_passthrough_key Space
+bind_copy_mode_passthrough_key Enter
+bind_copy_mode_passthrough_key Tab
+bind_copy_mode_passthrough_key BSpace
+bind_copy_mode_passthrough_key /
+bind_copy_mode_passthrough_key '?'
+
 # Mouse drag: keep selection visible after release but do NOT copy to clipboard.
 # copy-selection-no-clear stays in copy-mode with highlight intact.
-# User right-clicks → Copy to explicitly copy, or clicks anywhere to cancel.
+# Typed input exits copy-mode via the tmux key bindings above, so left-drag can
+# start selections after scrolling through history without jumping back down.
 tmux -L "$TMUX_SOCKET" bind -T copy-mode MouseDragEnd1Pane send-keys -X copy-selection-no-clear
 tmux -L "$TMUX_SOCKET" bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-selection-no-clear
-# Left-click exits copy-mode so normal input resumes.
-tmux -L "$TMUX_SOCKET" bind -T copy-mode MouseDown1Pane select-pane \\\; send-keys -X cancel
-tmux -L "$TMUX_SOCKET" bind -T copy-mode-vi MouseDown1Pane select-pane \\\; send-keys -X cancel
 
 # Use the most recently active client's size instead of the smallest.
 tmux -L "$TMUX_SOCKET" set-option -t "$TMUX_SESSION" -g window-size latest

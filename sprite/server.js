@@ -38,7 +38,131 @@ const CACHE_DIR = path.join(DATA_DIR, "cache", "youtube");
 const BRIDGE_SCRIPT = `
 (function() {
   var ttydSocket = null;
+  var copyModeActive = false;
+  var pointerSelecting = false;
+  var selectionLatched = false;
+  var cachedSelectionText = '';
   var NativeWebSocket = window.WebSocket;
+
+  function sendTerminalInput(text) {
+    if (!ttydSocket || ttydSocket.readyState !== WebSocket.OPEN || !text) return false;
+    ttydSocket.send('0' + text);
+    return true;
+  }
+
+  function clearBrowserSelection() {
+    var selection = window.getSelection && window.getSelection();
+    if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
+      selection.removeAllRanges();
+      return true;
+    }
+    return false;
+  }
+
+  function terminalSelectionActive() {
+    var selection = window.getSelection && window.getSelection();
+    return Boolean(
+      selectionLatched ||
+      copyModeActive ||
+      (selection && selection.rangeCount > 0 && !selection.isCollapsed)
+    );
+  }
+
+  function focusTerminal() {
+    var helper = document.querySelector('.xterm-helper-textarea');
+    if (helper && typeof helper.focus === 'function') {
+      helper.focus();
+    }
+  }
+
+  function exitSelectionMode() {
+    var hadSelection = terminalSelectionActive();
+    clearBrowserSelection();
+    focusTerminal();
+    if (!hadSelection) return false;
+    var sentEsc = false;
+    if (copyModeActive) {
+      sendTerminalInput('\\u001b');
+      sentEsc = true;
+    }
+    copyModeActive = false;
+    selectionLatched = false;
+    return sentEsc;
+  }
+
+  // Exit selection/copy mode and send text to terminal.
+  // Adds a delay after ESC so tmux doesn't interpret ESC + first char
+  // as an Alt+key escape sequence.
+  function sendTextToTerminal(text) {
+    if (!text) return;
+    var sentEsc = exitSelectionMode();
+    if (sentEsc) {
+      setTimeout(function() { sendTerminalInput(text); }, 50);
+    } else {
+      sendTerminalInput(text);
+    }
+  }
+
+  function pasteClipboardToTerminal() {
+    navigator.clipboard.readText().then(function(text) {
+      if (!text) return;
+      sendTextToTerminal(text);
+    }).catch(function(err) {
+      console.warn('[BrowserBud] Paste failed:', err);
+    });
+  }
+
+  function copySelectionToClipboard() {
+    var selection = window.getSelection && window.getSelection();
+    var selectedText = selection ? selection.toString() : '';
+    var textToCopy = selectedText || cachedSelectionText;
+    if (textToCopy) {
+      cachedSelectionText = textToCopy;
+      return navigator.clipboard.writeText(textToCopy).catch(function(err) {
+        console.warn('[BrowserBud] Clipboard write failed:', err);
+      });
+    }
+
+    // Fallback to tmux paste buffer when the browser selection is empty.
+    return fetch('/api/clipboard').then(function(r) { return r.json(); }).then(function(data) {
+      if (!data.text) return;
+      return navigator.clipboard.writeText(data.text);
+    }).catch(function(err) {
+      console.warn('[BrowserBud] Copy failed:', err);
+    });
+  }
+
+  function refreshSelectionCache() {
+    return fetch('/api/clipboard').then(function(r) { return r.json(); }).then(function(data) {
+      cachedSelectionText = data.text || '';
+      logBridge('selection-cache-refresh', { cachedSelectionLen: cachedSelectionText.length });
+      return cachedSelectionText;
+    }).catch(function() {
+      cachedSelectionText = '';
+      return '';
+    });
+  }
+
+  function logBridge(event, details) {
+    try {
+      fetch('/api/bridge-log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: event,
+          details: details || {},
+          ts: new Date().toISOString(),
+        }),
+        keepalive: true,
+      }).catch(function() {});
+    } catch {}
+  }
+
+  function isCopyShortcut(e) {
+    if ((e.key || '').toLowerCase() !== 'c') return false;
+    if (e.altKey || e.shiftKey) return false;
+    return (e.metaKey || e.ctrlKey) && !(e.metaKey && e.ctrlKey);
+  }
 
   // Subclass WebSocket to capture ttyd's connection
   class BrowserBudWebSocket extends NativeWebSocket {
@@ -65,10 +189,97 @@ const BRIDGE_SCRIPT = `
     var text = event.data.text || '';
     if (!text) return;
 
-    // ttyd protocol: string frame, '0' prefix = CMD_INPUT
-    ttydSocket.send('0' + text);
+    sendTextToTerminal(text);
     console.log('[BrowserBud] Typed into terminal:', text);
   });
+
+  document.addEventListener('wheel', function(e) {
+    if (e.deltaY < 0) {
+      copyModeActive = true;
+    }
+  }, { capture: true, passive: true });
+
+  document.addEventListener('mousedown', function(e) {
+    if (e.button !== 0) return;
+    pointerSelecting = true;
+    if (copyModeActive) {
+      selectionLatched = false;
+    }
+  }, true);
+
+  document.addEventListener('mouseup', function() {
+    if (!pointerSelecting) return;
+    pointerSelecting = false;
+    selectionLatched = terminalSelectionActive();
+    if (selectionLatched) {
+      // tmux updates the paste buffer just after drag end; wait a tick so we
+      // read the populated selection instead of the previous buffer contents.
+      setTimeout(function() { refreshSelectionCache(); }, 25);
+    } else {
+      cachedSelectionText = '';
+    }
+  }, true);
+
+  window.addEventListener('keydown', function(e) {
+    if (!isCopyShortcut(e)) return;
+    logBridge('copy-shortcut-keydown', {
+      metaKey: !!e.metaKey,
+      ctrlKey: !!e.ctrlKey,
+      selectionActive: terminalSelectionActive(),
+      cachedSelectionLen: cachedSelectionText.length,
+    });
+    // Ctrl+C without selection: let xterm handle it (sends SIGINT)
+    if (e.ctrlKey && !e.metaKey && !terminalSelectionActive()) {
+      logBridge('copy-shortcut-pass-through', { reason: 'ctrl-c-without-selection' });
+      return;
+    }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (!cachedSelectionText) {
+      copySelectionToClipboard();
+      logBridge('copy-shortcut-fallback-write', { reason: 'empty-cache' });
+      return;
+    }
+    var execResult = false;
+    try {
+      if (typeof document.execCommand === 'function') {
+        execResult = document.execCommand('copy');
+      }
+    } catch (err) {
+      logBridge('copy-shortcut-exec-error', { message: String(err && err.message || err) });
+    }
+    logBridge('copy-shortcut-exec-result', { ok: execResult });
+    if (!execResult) {
+      copySelectionToClipboard();
+    }
+  }, true);
+
+  window.addEventListener('copy', function(e) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    var selection = window.getSelection && window.getSelection();
+    var selectedText = selection ? selection.toString() : '';
+    var textToCopy = selectedText || cachedSelectionText;
+    logBridge('copy-event', {
+      selectedTextLen: selectedText.length,
+      cachedSelectionLen: cachedSelectionText.length,
+      hasClipboardData: !!e.clipboardData,
+    });
+    if (textToCopy && e.clipboardData) {
+      e.clipboardData.setData('text/plain', textToCopy);
+      cachedSelectionText = textToCopy;
+      return;
+    }
+    copySelectionToClipboard();
+  }, true);
+
+  window.addEventListener('paste', function(e) {
+    var text = e.clipboardData && (e.clipboardData.getData('text/plain') || e.clipboardData.getData('text'));
+    if (!text) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    sendTextToTerminal(text);
+  }, true);
 
   // === Clipboard & Context Menu ===
 
@@ -119,13 +330,7 @@ const BRIDGE_SCRIPT = `
     }));
 
     _menu.appendChild(mkItem('Paste', function() {
-      navigator.clipboard.readText().then(function(text) {
-        if (text && ttydSocket && ttydSocket.readyState === 1) {
-          ttydSocket.send('0' + text);
-        }
-      }).catch(function(err) {
-        console.warn('[BrowserBud] Paste failed:', err);
-      });
+      pasteClipboardToTerminal();
     }));
 
     document.body.appendChild(_menu);
@@ -135,7 +340,11 @@ const BRIDGE_SCRIPT = `
     if (rect.bottom > window.innerHeight) _menu.style.top = Math.max(0, window.innerHeight - rect.height - 4) + 'px';
   }
 
-  document.addEventListener('contextmenu', function(e) { e.preventDefault(); showMenu(e.clientX, e.clientY); });
+  window.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    showMenu(e.clientX, e.clientY);
+  }, true);
   document.addEventListener('click', function() { hideMenu(); });
   document.addEventListener('keydown', function(e) { if (e.key === 'Escape') hideMenu(); });
 })();
@@ -170,12 +379,17 @@ function buildSelectionNotification(context) {
     displayText += ` (${selection.lineCount} line${selection.lineCount > 1 ? "s" : ""} selected)`;
   }
 
-  // Include selected text in the notification so Claude has direct access
-  const textContent = selection?.text
-    ? `${displayText}\n\n--- Selected Text ---\n${selection.text}`
-    : displayText;
+  // Always point Claude to the file for selections — the MCP notification
+  // text field gets truncated by Claude Code for large content.
+  const selectionFile = path.join(CONTEXT_DIR, "selection.txt");
+  let textContent;
+  if (selection?.text) {
+    textContent = `${displayText}\n\nSelected text saved to: ${selectionFile}`;
+  } else {
+    textContent = displayText;
+  }
 
-  const filePath = url || "";
+  const filePath = selection?.text ? selectionFile : (url || "");
 
   return {
     notification: JSON.stringify({
@@ -775,6 +989,18 @@ function handleContext(req, res) {
         context.timestamp = new Date().toISOString();
         fs.mkdirSync(CONTEXT_DIR, { recursive: true });
         fs.writeFileSync(CONTEXT_FILE, JSON.stringify(context, null, 2));
+
+        // Write selection text to a file so Claude can read it directly
+        // (the MCP notification text field gets truncated for large selections)
+        const selectionFile = path.join(CONTEXT_DIR, "selection.txt");
+        if (context.selection?.text) {
+          fs.writeFileSync(selectionFile, context.selection.text);
+          log.info({ lines: context.selection.lineCount, chars: context.selection.text.length }, "selection written to file");
+        } else {
+          // Clear the selection file when nothing is selected
+          try { fs.unlinkSync(selectionFile); } catch {}
+        }
+
         lastContext = context;
 
         // Push to Claude Code via MCP
@@ -1009,6 +1235,29 @@ function handleClipboard(req, res) {
   }
 }
 
+function handleBridgeLog(req, res) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
+    return;
+  }
+
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", () => {
+    try {
+      const payload = body ? JSON.parse(body) : {};
+      log.info({ bridge: payload }, "bridge event");
+      res.writeHead(204);
+      res.end();
+    } catch (err) {
+      log.warn({ err: err.message, body }, "bridge log parse failed");
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid JSON" }));
+    }
+  });
+}
+
 const server = http.createServer((req, res) => {
   const reqStart = Date.now();
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1051,6 +1300,10 @@ const server = http.createServer((req, res) => {
 
   if (req.url === "/api/clipboard") {
     return handleClipboard(req, res);
+  }
+
+  if (req.url === "/api/bridge-log") {
+    return handleBridgeLog(req, res);
   }
 
   // Serve the bridge script

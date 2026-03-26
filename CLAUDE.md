@@ -72,6 +72,18 @@ BrowserBud is a browser extension that gives you a contextual AI terminal when b
    - Listens for `postMessage` events with type `browserbud:type-text`
    - Writes text to ttyd's WebSocket using its binary protocol (byte 0 = CMD_INPUT + text bytes)
    - Enables the extension to programmatically type into Claude Code's input (similar to how IDE extensions like VS Code/JetBrains inject file references)
+   - Also owns terminal clipboard integration and the custom right-click menu
+
+### Terminal Interaction Model
+
+Terminal input/selection behavior is shared across `ttyd`, `xterm.js`, `tmux`, and the injected bridge script. The important boundary is:
+
+- `tmux` owns scrollback and selection semantics
+- the injected bridge owns browser clipboard integration, custom context menu, and programmatic terminal input
+
+If you touch terminal selection, copy, paste, or scrollback behavior, read:
+
+- [docs/terminal-interactions.md](/Users/animeshjain/Projects/browserbud/docs/terminal-interactions.md)
 
 ### Browser Extension
 
@@ -208,6 +220,8 @@ BROWSERBUD_DATA_DIR=$HOME/browse CLAUDE_CODE_SSE_PORT=$MCP_PORT ENABLE_IDE_INTEG
 - **Server logs**: Check stdout of `server.js` — logs all MCP connections, disconnections, and broadcasts
 - **Extension logs**: Chrome DevTools → background service worker console, or the YouTube tab console
 - **Test context API**: `curl -X POST http://localhost:8989/api/context -H "Content-Type: application/json" -d '{"site":"youtube","title":"Test"}'`
+- **Test tmux selection buffer**: `curl http://localhost:8989/api/clipboard`
+- **Bridge interaction logs**: reproduce once, then inspect `bridge event` lines in the server logs
 
 ## Skills
 
