@@ -126,7 +126,7 @@ The extension can type text directly into the Claude Code terminal input:
 ```
 browserbud/                   # Code repo (development only)
 ├── CLAUDE.md                 # This file
-├── sprite/
+├── server/
 │   ├── server.js             # Proxy + MCP server (main process)
 │   ├── start.sh              # Startup script (server → ttyd)
 │   ├── package.json          # Deps: http-proxy, ws, uuid
@@ -193,7 +193,7 @@ browserbud/                   # Code repo (development only)
 
 ## Development Workflow
 
-1. **Server changes**: Edit `sprite/server.js`, restart with `start.sh`
+1. **Server changes**: Edit `server/server.js`, restart with `start.sh`
 2. **Extension changes**: `cd extension && npm install && npm run build`
 3. **Load in Chrome**: `chrome://extensions` → Developer Mode → Load unpacked → `extension/dist/chrome-mv3/`
 4. **Test**: Open YouTube, click BrowserBud icon for side panel, check status line updates
@@ -205,10 +205,10 @@ browserbud/                   # Code repo (development only)
 pkill -f 'ttyd|server.js'
 
 # Option A: Use start.sh (manages startup order)
-bash sprite/start.sh
+bash server/start.sh
 
 # Option B: Manual (useful for debugging)
-node sprite/server.js &
+node server/server.js &
 # Wait for MCP port, then:
 MCP_PORT=$(cat ~/.claude/ide/browserbud.port)
 BROWSERBUD_DATA_DIR=$HOME/browse CLAUDE_CODE_SSE_PORT=$MCP_PORT ENABLE_IDE_INTEGRATION=true \

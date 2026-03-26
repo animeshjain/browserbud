@@ -271,7 +271,7 @@ Currently BrowserBud always uses the default (top comments) token from the initi
 | File | Role |
 |------|------|
 | `skills/yt-research/comments.ts` | `fetchComments()` — POSTs to server's extract endpoint |
-| `sprite/server.js` | `POST /api/extract-comments` endpoint, caches `comments.json` + `comments.md` |
+| `server/server.js` | `POST /api/extract-comments` endpoint, caches `comments.json` + `comments.md` |
 | `extension/entrypoints/background.ts` | WebSocket client, dispatches `extract-comments` commands to content scripts |
 | `extension/entrypoints/content.ts` | Bridges messages between background and MAIN world |
 | `extension/entrypoints/youtube-player.ts` | InnerTube API fetch, mutation parsing, reply fetching |

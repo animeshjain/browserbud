@@ -32,7 +32,7 @@ const CONTEXT_FILE = path.join(CONTEXT_DIR, "current.json");
 const CACHE_DIR = path.join(DATA_DIR, "cache", "youtube");
 
 // ─── Terminal Bridge Script ─────────────────────────────────────────────────
-// Built from sprite/bridge/terminal_bridge.ts via `npm run build:bridge`.
+// Built from server/bridge/terminal_bridge.ts via `npm run build:bridge`.
 // Injected into ttyd's HTML page. Captures the ttyd WebSocket and listens for
 // postMessage from the extension side panel to type text into the terminal.
 
@@ -40,7 +40,7 @@ const BRIDGE_BUILT_PATH = path.join(__dirname, "bridge", "terminal_bridge.built.
 if (!fs.existsSync(BRIDGE_BUILT_PATH)) {
   console.error(
     "ERROR: Terminal bridge not built. Run 'npm run build:bridge' from the repo root, " +
-    "or use 'bash sprite/start.sh' which builds it automatically."
+    "or use 'bash server/start.sh' which builds it automatically."
   );
   process.exit(1);
 }

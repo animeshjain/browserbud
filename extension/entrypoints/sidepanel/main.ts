@@ -77,7 +77,7 @@ function sendToServer(msg: Record<string, unknown>) {
 // Probe the content script on a tab for its capabilities
 async function probeTabCapabilities(tabId: number): Promise<string[]> {
   try {
-    const response = await chrome.tabs.sendMessage(tabId, { type: "getCapabilities" });
+    const response = await browser.tabs.sendMessage(tabId, { type: "getCapabilities" });
     return response?.capabilities || [];
   } catch {
     return []; // no content script on this tab
@@ -114,7 +114,7 @@ async function connectExtensionWs() {
 
       // Send current tab context on connect
       try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
         if (tab?.id) {
           activeTabId = tab.id;
           activeTabCapabilities = await probeTabCapabilities(tab.id);
@@ -172,7 +172,7 @@ async function handleExtractTranscriptCommand(msg: {
 }) {
   const { videoId, requestId } = msg;
 
-  const tabs = await chrome.tabs.query({ url: "*://*.youtube.com/watch*" });
+  const tabs = await browser.tabs.query({ url: "*://*.youtube.com/watch*" });
   let targetTabId: number | null = null;
 
   for (const tab of tabs) {
@@ -193,7 +193,7 @@ async function handleExtractTranscriptCommand(msg: {
   }
 
   try {
-    await chrome.tabs.sendMessage(targetTabId, {
+    await browser.tabs.sendMessage(targetTabId, {
       type: "extractTranscript",
       videoId,
       requestId,
@@ -219,7 +219,7 @@ async function handleExtractCommentsCommand(msg: {
 }) {
   const { videoId, requestId } = msg;
 
-  const tabs = await chrome.tabs.query({ url: "*://*.youtube.com/watch*" });
+  const tabs = await browser.tabs.query({ url: "*://*.youtube.com/watch*" });
   let targetTabId: number | null = null;
 
   for (const tab of tabs) {
@@ -240,7 +240,7 @@ async function handleExtractCommentsCommand(msg: {
   }
 
   try {
-    await chrome.tabs.sendMessage(targetTabId, {
+    await browser.tabs.sendMessage(targetTabId, {
       type: "extractComments",
       videoId,
       requestId,
@@ -266,7 +266,7 @@ async function handleGetPlayerStateCommand(msg: {
 }) {
   const { videoId, requestId } = msg;
 
-  const tabs = await chrome.tabs.query({ url: "*://*.youtube.com/watch*" });
+  const tabs = await browser.tabs.query({ url: "*://*.youtube.com/watch*" });
   let targetTabId: number | null = null;
 
   for (const tab of tabs) {
@@ -287,7 +287,7 @@ async function handleGetPlayerStateCommand(msg: {
   }
 
   try {
-    await chrome.tabs.sendMessage(targetTabId, {
+    await browser.tabs.sendMessage(targetTabId, {
       type: "getPlayerState",
       requestId,
     });
@@ -313,7 +313,7 @@ async function handleGetPageContentCommand(msg: {
     let tabUrl: string | undefined;
 
     if (!tabId) {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tabs = await browser.tabs.query({ active: true, currentWindow: true });
       const tab = tabs?.[0];
       if (!tab?.id) {
         sendToServer({
@@ -331,14 +331,14 @@ async function handleGetPageContentCommand(msg: {
     // Try content script first
     let result: { content: string; title: string; url: string } | null = null;
     try {
-      result = await chrome.tabs.sendMessage(tabId, { type: "getPageContent" });
+      result = await browser.tabs.sendMessage(tabId, { type: "getPageContent" });
     } catch {
       // Content script not available — fall back to scripting API
     }
 
     if (!result) {
       try {
-        const [injection] = await chrome.scripting.executeScript({
+        const [injection] = await browser.scripting.executeScript({
           target: { tabId },
           func: () => {
             const semantic = document.querySelector("article, main, [role='main']");
@@ -514,11 +514,11 @@ browser.runtime.onMessage.addListener((message: Record<string, any>, sender: any
 
 // ─── Tab tracking ────────────────────────────────────────────────────────────
 
-chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+browser.tabs.onActivated.addListener(async ({ tabId }) => {
   activeTabId = tabId;
   activeTabCapabilities = [];
   try {
-    const tab = await chrome.tabs.get(tabId);
+    const tab = await browser.tabs.get(tabId);
     activeTabCapabilities = await probeTabCapabilities(tabId);
     sendToServer({
       type: "session-update",
@@ -529,10 +529,10 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   } catch {}
 });
 
-chrome.windows.onFocusChanged.addListener(async (windowId) => {
-  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+browser.windows.onFocusChanged.addListener(async (windowId) => {
+  if (windowId === browser.windows.WINDOW_ID_NONE) return;
   try {
-    const [tab] = await chrome.tabs.query({ active: true, windowId });
+    const [tab] = await browser.tabs.query({ active: true, windowId });
     if (tab?.id && tab.id !== activeTabId) {
       activeTabId = tab.id;
       activeTabCapabilities = await probeTabCapabilities(tab.id);

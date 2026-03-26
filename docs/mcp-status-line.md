@@ -161,11 +161,11 @@ Using tmux solves this: `start.sh` launches Claude Code in a detached tmux sessi
 
 ## Code references
 
-- **MCP server**: `sprite/server.js` — `startMcpServer()`, `handleMcpMessage()`, `broadcastSelection()`
-- **Context replay**: `sprite/server.js` — `maybeSendCurrentContext()`, `lastContext`, `readyClients`
-- **Lock file write/cleanup**: `sprite/server.js` — lock file in `startMcpServer()`, removal in `removeLockFile()`
-- **Lock file hiding**: `sprite/start.sh` — hides competing IDE lock files before starting Claude Code
-- **Lock file restore**: `sprite/server.js` — `restoreHiddenLockFiles()`, called on first MCP connection
+- **MCP server**: `server/server.js` — `startMcpServer()`, `handleMcpMessage()`, `broadcastSelection()`
+- **Context replay**: `server/server.js` — `maybeSendCurrentContext()`, `lastContext`, `readyClients`
+- **Lock file write/cleanup**: `server/server.js` — lock file in `startMcpServer()`, removal in `removeLockFile()`
+- **Lock file hiding**: `server/start.sh` — hides competing IDE lock files before starting Claude Code
+- **Lock file restore**: `server/server.js` — `restoreHiddenLockFiles()`, called on first MCP connection
 - **Context source**: `extension/entrypoints/content.ts` → `background.ts` → `POST /api/context` → `broadcastSelection()`
 - **Initial context send**: `extension/entrypoints/background.ts` — queries active tab on WebSocket connect
 

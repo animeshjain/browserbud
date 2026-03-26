@@ -42,7 +42,7 @@ YouTube tab --> content script --> background worker --> server --> MCP --> Clau
                                                               \-> WebSocket --> extension (on-demand transcript extraction)
 ```
 
-A local Node server (`sprite/server.js`) ties everything together. It proxies ttyd, receives page context from the
+A local Node server (`server/server.js`) ties everything together. It proxies ttyd, receives page context from the
 extension, broadcasts it to Claude Code via the MCP IDE integration protocol, and brokers commands between CLI skills
 and the browser.
 
@@ -107,7 +107,7 @@ fetches the transcript and responds.
 ## Project structure
 
 ```
-sprite/           Local server (Node.js proxy + MCP + extension WebSocket)
+server/           Local server (Node.js proxy + MCP + extension WebSocket)
 extension/        WXT browser extension (Chrome MV3 / Firefox MV2)
 skills/           CLI tools Claude Code can invoke
   yt-research/    YouTube transcript fetching and analysis

@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "setup": "npm install --prefix sprite && npm install --prefix skills/yt-research && npm install --prefix extension",
-    "build:bridge": "npm run --prefix sprite build:bridge",
-    "test:bridge": "npm run --prefix sprite test:bridge",
-    "start": "bash sprite/start.sh",
+    "setup": "npm install --prefix server && npm install --prefix skills/yt-research && npm install --prefix extension",
+    "build:bridge": "npm run --prefix server build:bridge",
+    "test:bridge": "npm run --prefix server test:bridge",
+    "start": "bash server/start.sh",
     "build:extension": "npm run --prefix extension build",
     "dev:extension": "npm run --prefix extension dev"
   }

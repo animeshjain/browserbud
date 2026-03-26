@@ -50,7 +50,7 @@ yt-research CLI receives { ok: true, text, lang, meta, source: "client" }
 | File | Role |
 |------|------|
 | `skills/yt-research/transcript.ts` | `fetchFromClient()` — first provider in the chain, POSTs to server |
-| `sprite/server.js` | `POST /api/extract-transcript` endpoint + `/ws/extension` WebSocket server |
+| `server/server.js` | `POST /api/extract-transcript` endpoint + `/ws/extension` WebSocket server |
 | `extension/entrypoints/background.ts` | WebSocket client (auto-reconnects), dispatches commands to content scripts |
 | `extension/entrypoints/content.ts` | Bridges messages between background (runtime.sendMessage) and MAIN world (postMessage) |
 | `extension/entrypoints/youtube-player.ts` | XHR interception, CC toggle, JSON3 parsing |
@@ -107,7 +107,7 @@ This is why the XHR interception approach works but direct fetch/API calls don't
 
 ```bash
 # Check extension WebSocket is connected (look for [ext-ws] in server logs)
-node sprite/server.js
+node server/server.js
 
 # Test extraction directly (user must be on a YouTube video page)
 curl -X POST http://localhost:8989/api/extract-transcript \

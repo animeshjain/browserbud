@@ -11,10 +11,10 @@ This document explains how to reduce complexity and how to add tests that preven
 
 The current terminal interaction path works, but it is structurally fragile because important behavior is split across:
 
-- `sprite/server.js`
+- `server/server.js`
   - the large injected `BRIDGE_SCRIPT` string
   - clipboard endpoints and debug endpoints
-- `sprite/start.sh`
+- `server/start.sh`
   - tmux copy-mode and mouse bindings
 - `ttyd` / `xterm.js`
   - browser terminal rendering and event delivery
@@ -72,7 +72,7 @@ Refactor these parts:
 
 Create a source file for bridge logic, for example:
 
-- `sprite/bridge/terminal_bridge.ts`
+- `server/bridge/terminal_bridge.ts`
 
 Target shape:
 

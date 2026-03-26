@@ -20,7 +20,7 @@ Small changes in one layer can easily regress another.
 The current architecture intentionally splits responsibility like this:
 
 - `tmux` owns scrollback and selection semantics.
-- The injected BrowserBud bridge in `sprite/server.js` owns:
+- The injected BrowserBud bridge in `server/server.js` owns:
   - `postMessage` input from the extension
   - custom right-click menu
   - browser clipboard integration
@@ -35,11 +35,11 @@ tmux is the source of truth for terminal selection.
 
 ## Files Involved
 
-- `sprite/server.js`
+- `server/server.js`
   - injects `BRIDGE_SCRIPT` into ttyd HTML
   - serves `/api/clipboard`
   - serves `/api/bridge-log` for bridge debugging
-- `sprite/start.sh`
+- `server/start.sh`
   - configures tmux mouse behavior
   - configures copy-mode bindings
   - configures `escape-time`
@@ -57,7 +57,7 @@ tmux is the source of truth for terminal selection.
 ### Typing While Selected
 
 - Normal typing in tmux copy-mode exits selection and forwards the key to Claude Code input.
-- This is implemented in `sprite/start.sh` with tmux copy-mode key bindings.
+- This is implemented in `server/start.sh` with tmux copy-mode key bindings.
 - The bridge no longer tries to own “type exits selection” for normal keyboard typing.
 
 ### Programmatic Input and Paste
@@ -89,7 +89,7 @@ tmux may consume the first pasted character as part of an `Alt+key` sequence.
 
 Current mitigation:
 
-- `sprite/start.sh` sets `escape-time 10`
+- `server/start.sh` sets `escape-time 10`
 - the bridge waits `50ms` after sending `ESC` before sending pasted/programmatic text
 
 ## Why `Cmd+C` Was Broken
@@ -149,7 +149,7 @@ If selection/copy/paste breaks:
 
 ## Regression Checklist
 
-After touching `sprite/server.js` or `sprite/start.sh`, test all of these:
+After touching `server/server.js` or `server/start.sh`, test all of these:
 
 1. Scroll up and drag-select text.
 2. After scrollback selection, type `j`.

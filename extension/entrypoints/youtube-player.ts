@@ -1,6 +1,8 @@
-// MAIN world content script — extracts YouTube transcripts via XHR interception.
-// When triggered, toggles CC on to force YouTube's player to fetch captions
-// (with its internal POT token), intercepts the XHR response, and parses JSON3.
+// MAIN world content script — extracts YouTube transcripts and comments.
+// Transcript extraction uses a three-tier fallback chain:
+//   1. Direct fetch from captionTracks[].baseUrl (from player response)
+//   2. Re-fetch a previously loaded /api/timedtext URL from the performance buffer
+//   3. Toggle CC to force a fresh XHR and intercept it (legacy fallback)
 // Communicates with the ISOLATED world content script via window.postMessage.
 
 export default defineContentScript({
@@ -89,12 +91,75 @@ export default defineContentScript({
         .join("\n");
     }
 
-    // ─── XHR Interception ───────────────────────────────────────────────
+    // ─── Transcript Extraction (direct fetch from player response) ─────
+
+    function getCaptionTracks(): Array<{ baseUrl: string; languageCode: string; kind?: string; name?: { simpleText?: string } }> {
+      const player = getPlayer() as any;
+      const playerRes = player?.getPlayerResponse?.();
+      return playerRes?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+    }
+
+    async function fetchTranscriptDirect(videoId: string, lang = "en"): Promise<{ text: string; lang: string }> {
+      const tracks = getCaptionTracks();
+      if (!tracks.length) throw new Error("No caption tracks in player response");
+
+      // Prefer exact match, then prefix match, then first track
+      const track =
+        tracks.find((t) => t.languageCode === lang) ||
+        tracks.find((t) => t.languageCode.startsWith(lang)) ||
+        tracks[0];
+
+      if (!track?.baseUrl) throw new Error("Caption track has no baseUrl");
+
+      const url = track.baseUrl + "&fmt=json3";
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`Direct fetch failed: ${resp.status}`);
+
+      const json3 = await resp.json();
+      const segments = parseJson3(json3);
+      if (segments.length === 0) throw new Error("Direct fetch returned 0 segments");
+
+      return { text: formatSegments(segments), lang: track.languageCode };
+    }
+
+    // ─── Transcript Extraction (performance buffer re-fetch) ─────────
+
+    async function fetchTranscriptFromPerfBuffer(videoId: string): Promise<{ text: string; lang: string }> {
+      const entries = performance.getEntriesByType("resource");
+      // Find the most recent timedtext URL for this video
+      const timedtextEntry = entries
+        .filter((e) => e.name.includes("/api/timedtext") && e.name.includes(`v=${videoId}`))
+        .pop();
+
+      if (!timedtextEntry) throw new Error("No timedtext entry in performance buffer");
+
+      // The URL already has POT and all signed params baked in
+      let url = timedtextEntry.name;
+      // Ensure we get JSON3 format
+      if (!url.includes("fmt=json3")) {
+        url += (url.includes("?") ? "&" : "?") + "fmt=json3";
+      }
+
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`Performance buffer re-fetch failed: ${resp.status}`);
+
+      const json3 = await resp.json();
+      const segments = parseJson3(json3);
+      if (segments.length === 0) throw new Error("Performance buffer re-fetch returned 0 segments");
+
+      // Extract lang from URL params
+      const langMatch = url.match(/[?&]lang=([^&]+)/);
+      return { text: formatSegments(segments), lang: langMatch?.[1] || "en" };
+    }
+
+    // ─── Transcript Extraction (CC toggle + XHR interception fallback) ─
 
     interface PendingExtraction {
       requestId: string;
       videoId: string;
       wasCCActive: boolean;
+      resolve: (value: { text: string; lang: string }) => void;
+      reject: (err: Error) => void;
       timeout: ReturnType<typeof setTimeout>;
     }
 
@@ -117,18 +182,13 @@ export default defineContentScript({
       if (url.includes("/api/timedtext") && pendingExtraction) {
         const extraction = pendingExtraction;
         this.addEventListener("load", function () {
-          if (
-            !extraction ||
-            extraction.requestId !== pendingExtraction?.requestId
-          )
-            return;
+          if (!extraction || extraction.requestId !== pendingExtraction?.requestId) return;
           if (this.status !== 200 || this.responseText.length === 0) return;
 
           try {
             const json3 = JSON.parse(this.responseText);
             const segments = parseJson3(json3);
             const text = formatSegments(segments);
-            const meta = getVideoMeta();
 
             clearTimeout(extraction.timeout);
             pendingExtraction = null;
@@ -138,21 +198,7 @@ export default defineContentScript({
               setTimeout(() => toggleCC(), 200);
             }
 
-            console.log(
-              `[BrowserBud] Extracted ${segments.length} segments for ${extraction.videoId}`,
-            );
-
-            window.postMessage(
-              {
-                type: "BROWSERBUD_EXTRACT_TRANSCRIPT_RESULT",
-                requestId: extraction.requestId,
-                success: true,
-                text,
-                lang: "en",
-                meta,
-              },
-              "*",
-            );
+            extraction.resolve({ text, lang: "en" });
           } catch (err) {
             console.warn("[BrowserBud] Failed to parse timedtext:", err);
           }
@@ -160,6 +206,40 @@ export default defineContentScript({
       }
       return OriginalSend.apply(this, args as any);
     };
+
+    function fetchTranscriptViaCC(videoId: string, requestId: string): Promise<{ text: string; lang: string }> {
+      return new Promise((resolve, reject) => {
+        const ccBtn = document.querySelector(".ytp-subtitles-button");
+        if (!ccBtn) {
+          reject(new Error("No CC button found (video may not have captions)"));
+          return;
+        }
+
+        const wasCCActive = isCCActive();
+
+        const timeout = setTimeout(() => {
+          if (pendingExtraction?.requestId === requestId) {
+            pendingExtraction = null;
+            if (!wasCCActive && isCCActive()) toggleCC();
+            reject(new Error("Timed out waiting for timedtext XHR"));
+          }
+        }, 10000);
+
+        pendingExtraction = { requestId, videoId, wasCCActive, resolve, reject, timeout };
+
+        const player = getPlayer() as any;
+        if (player?.loadModule) {
+          player.loadModule("captions");
+        }
+
+        if (wasCCActive) {
+          toggleCC();
+          setTimeout(() => toggleCC(), 500);
+        } else {
+          setTimeout(() => toggleCC(), 300);
+        }
+      });
+    }
 
     // ─── Comment Extraction via InnerTube API ────────────────────────────
 
@@ -540,55 +620,52 @@ export default defineContentScript({
         return;
       }
 
-      // Check if player and CC button exist
-      const ccBtn = document.querySelector(".ytp-subtitles-button");
-      if (!ccBtn) {
+      // Fallback chain: direct fetch → performance buffer → CC toggle + XHR
+      const strategies: Array<{ name: string; fn: () => Promise<{ text: string; lang: string }> }> = [
+        { name: "direct", fn: () => fetchTranscriptDirect(videoId) },
+        { name: "perf-buffer", fn: () => fetchTranscriptFromPerfBuffer(videoId) },
+        { name: "cc-toggle", fn: () => fetchTranscriptViaCC(videoId, requestId) },
+      ];
+
+      (async () => {
+        const errors: string[] = [];
+        for (const strategy of strategies) {
+          try {
+            console.log(`[BrowserBud] Trying transcript strategy: ${strategy.name}`);
+            const result = await strategy.fn();
+            const meta = getVideoMeta();
+            console.log(
+              `[BrowserBud] Extracted transcript via ${strategy.name} for ${videoId}`,
+            );
+            window.postMessage(
+              {
+                type: "BROWSERBUD_EXTRACT_TRANSCRIPT_RESULT",
+                requestId,
+                success: true,
+                text: result.text,
+                lang: result.lang,
+                meta,
+              },
+              "*",
+            );
+            return;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[BrowserBud] Strategy ${strategy.name} failed: ${msg}`);
+            errors.push(`${strategy.name}: ${msg}`);
+          }
+        }
+
         window.postMessage(
           {
             type: "BROWSERBUD_EXTRACT_TRANSCRIPT_RESULT",
             requestId,
             success: false,
-            error: "No CC button found (video may not have captions)",
+            error: `All strategies failed: ${errors.join(" | ")}`,
           },
           "*",
         );
-        return;
-      }
-
-      const wasCCActive = isCCActive();
-
-      const timeout = setTimeout(() => {
-        if (pendingExtraction?.requestId === requestId) {
-          pendingExtraction = null;
-          // Restore CC state
-          if (!wasCCActive && isCCActive()) toggleCC();
-          window.postMessage(
-            {
-              type: "BROWSERBUD_EXTRACT_TRANSCRIPT_RESULT",
-              requestId,
-              success: false,
-              error: "Timed out waiting for timedtext XHR",
-            },
-            "*",
-          );
-        }
-      }, 10000);
-
-      pendingExtraction = { requestId, videoId, wasCCActive, timeout };
-
-      // Load captions module and toggle CC to trigger the XHR
-      const player = getPlayer() as any;
-      if (player?.loadModule) {
-        player.loadModule("captions");
-      }
-
-      if (wasCCActive) {
-        // Turn off first, then back on to force a fresh XHR
-        toggleCC();
-        setTimeout(() => toggleCC(), 500);
-      } else {
-        setTimeout(() => toggleCC(), 300);
-      }
+      })();
     });
   },
 });
