@@ -12,11 +12,9 @@
     "zip:firefox": "wxt zip --browser firefox"
   },
   "dependencies": {
-    "turndown": "^7.2.2",
     "wxt": "^0.20.19"
   },
   "devDependencies": {
-    "@types/chrome": "^0.1.38",
-    "@types/turndown": "^5.0.6"
+    "@types/chrome": "^0.1.38"
   }
 }

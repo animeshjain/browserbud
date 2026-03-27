@@ -7,6 +7,8 @@ const { v4: uuidv4 } = require("uuid");
 const { execSync } = require("child_process");
 const os = require("os");
 const pino = require("pino");
+const TurndownService = require("turndown");
+const { JSDOM } = require("jsdom");
 
 // ─── Logging ────────────────────────────────────────────────────────────────
 
@@ -602,6 +604,21 @@ function handleExtractComments(req, res) {
   });
 }
 
+// ─── HTML → Markdown conversion ──────────────────────────────────────────────
+
+function htmlToMarkdown(html) {
+  const td = new TurndownService({
+    headingStyle: "atx",
+    codeBlockStyle: "fenced",
+    bulletListMarker: "-",
+  });
+  td.remove(["nav", "header", "footer", "aside"]);
+
+  // Turndown needs a DOM — parse the pruned HTML with JSDOM
+  const dom = new JSDOM(html);
+  return td.turndown(dom.window.document.body);
+}
+
 function handleExtractPageContent(req, res) {
   if (req.method !== "POST") {
     res.writeHead(405, { "Content-Type": "application/json" });
@@ -620,16 +637,19 @@ function handleExtractPageContent(req, res) {
       }, 15000);
 
       if (result.success) {
+        // Extension sends pruned HTML — convert to Markdown server-side
+        const markdown = htmlToMarkdown(result.html);
+
         // Save to context directory
         const contentPath = path.join(CONTEXT_DIR, "page-content.txt");
         fs.mkdirSync(CONTEXT_DIR, { recursive: true });
-        fs.writeFileSync(contentPath, result.content);
-        log.info({ chars: result.content.length, title: result.title }, "page content extracted");
+        fs.writeFileSync(contentPath, markdown);
+        log.info({ htmlChars: result.html.length, mdChars: markdown.length, title: result.title }, "page content extracted");
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           ok: true,
-          content: result.content,
+          content: markdown,
           title: result.title,
           url: result.url,
         }));

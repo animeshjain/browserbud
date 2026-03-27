@@ -333,8 +333,8 @@ async function handleGetPageContentCommand(msg: {
       tabUrl = tab.url;
     }
 
-    // Try content script first
-    let result: { content: string; title: string; url: string } | null = null;
+    // Try content script first (returns pruned HTML)
+    let result: { html: string; title: string; url: string } | null = null;
     try {
       result = await browser.tabs.sendMessage(tabId, { type: "getPageContent" });
     } catch {
@@ -343,23 +343,49 @@ async function handleGetPageContentCommand(msg: {
 
     if (!result) {
       try {
+        // Inline DOM pruning — same logic as extract-page.ts but self-contained
+        // for the executeScript context (can't import modules).
         const [injection] = await browser.scripting.executeScript({
           target: { tabId },
           func: () => {
-            const semantic = document.querySelector("article, main, [role='main']");
-            if (semantic) {
-              return {
-                content: semantic.textContent?.trim() || "",
-                title: document.title.trim(),
-                url: window.location.href,
-              };
+            const REMOVE_TAGS = ["script", "style", "noscript", "svg", "link", "meta", "iframe"];
+            const KEEP_ATTRS = new Set(["href", "src", "alt", "role", "data-testid", "aria-label", "dir", "lang"]);
+
+            const root =
+              document.querySelector("main") ||
+              document.querySelector("[role='main']") ||
+              document.body;
+
+            const clone = root.cloneNode(true) as Element;
+
+            for (const tag of REMOVE_TAGS) {
+              clone.querySelectorAll(tag).forEach((el) => el.remove());
             }
-            const clone = document.body.cloneNode(true) as HTMLElement;
-            for (const tag of ["script", "style", "nav", "header", "footer", "aside", "noscript"]) {
-              for (const el of clone.querySelectorAll(tag)) el.remove();
+            clone.querySelectorAll('[aria-hidden="true"], [hidden]').forEach((el) => el.remove());
+
+            for (const el of clone.querySelectorAll("*")) {
+              for (const attr of [...el.attributes]) {
+                if (!KEEP_ATTRS.has(attr.name)) el.removeAttribute(attr.name);
+              }
             }
+
+            for (const a of clone.querySelectorAll("a")) {
+              const text = a.textContent?.trim();
+              if (text) {
+                while (a.firstChild) a.removeChild(a.firstChild);
+                a.appendChild(document.createTextNode(text));
+              }
+            }
+
+            (function removeEmpties(el: Element) {
+              for (const child of [...el.children]) removeEmpties(child);
+              if (!el.textContent?.trim() && !el.querySelector("img, video, audio") && el !== clone) {
+                el.remove();
+              }
+            })(clone);
+
             return {
-              content: clone.textContent?.trim() || "",
+              html: clone.innerHTML,
               title: document.title.trim(),
               url: window.location.href,
             };
@@ -382,7 +408,7 @@ async function handleGetPageContentCommand(msg: {
         type: "page-content-result",
         requestId,
         success: true,
-        content: result.content,
+        html: result.html,
         title: result.title,
         url: result.url,
       });

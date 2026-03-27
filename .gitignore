@@ -6,3 +6,4 @@ context.json
 .claude/settings.local.json
 server/.claude/
 server/bridge/*.built.js
+temp/
