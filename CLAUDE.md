@@ -271,6 +271,40 @@ To add context capture for a new site:
 3. Implement `getContext()` to return `{ site: "<name>", title: "<relevant info>", url }`
 4. The background worker, server, and MCP broadcast are generic — no changes needed
 
+## Chrome MV3 vs Firefox MV2 Pitfalls
+
+The extension targets Chrome MV3 and Firefox MV2 (via WXT). These have fundamentally different background execution models, and bugs here keep regressing. Read this before touching background or content script code.
+
+### Service worker lifetime (Chrome MV3)
+
+Chrome's background is a **service worker** that Chrome can terminate at any time. Any async work (fetch, storage, etc.) started in an event listener must be **returned as a Promise** — otherwise Chrome kills the worker before the work completes. Firefox uses a persistent background page and is unaffected.
+
+```typescript
+// WRONG — Chrome kills the worker before fetch completes
+browser.runtime.onMessage.addListener((message) => {
+  sendContext(message.data);    // fire-and-forget, Promise lost
+});
+
+// RIGHT — returned Promise keeps the worker alive
+browser.runtime.onMessage.addListener((message) => {
+  return sendContext(message.data);  // Chrome waits for this
+});
+```
+
+### Content script orphaning (Chrome MV3)
+
+When the extension is reloaded in Chrome, **content scripts on existing tabs become orphaned** — they lose their connection to the new service worker. `browser.tabs.sendMessage()` will throw for these tabs until they are navigated or refreshed. Firefox re-injects content scripts on reload, so this only breaks in Chrome.
+
+Any code that sends messages to content scripts (e.g., `refreshContextForTab`) **must handle failure gracefully** — never assume the content script is reachable. Use `browser.tabs.get()` as a fallback to construct context from tab metadata (URL, title).
+
+### API compatibility
+
+Always use `browser.*` APIs (WXT's cross-browser abstraction), never `chrome.*` directly. In Firefox, `chrome.tabs.query()` uses callbacks and returns `undefined` from `await`, causing crashes. The only exception is Chrome-only APIs like `chrome.sidePanel` that must be guarded by browser checks.
+
+### Terminal input
+
+Terminals expect `\r` (carriage return) for Enter, not `\n`. When sending text + Enter to the terminal via `typeInTerminal`, always use `\r`.
+
 ## Known Issues
 
 - Claude Code may need `/ide` → select BrowserBud to connect if auto-connect doesn't trigger

@@ -16,8 +16,10 @@ const settingsCancel = document.getElementById("settings-cancel") as HTMLButtonE
 const helpBtn = document.getElementById("help-btn") as HTMLButtonElement;
 const helpOverlay = document.getElementById("help-overlay") as HTMLDivElement;
 const helpClose = document.getElementById("help-close") as HTMLButtonElement;
-const authBanner = document.getElementById("auth-banner") as HTMLDivElement;
+const authOverlay = document.getElementById("auth-overlay") as HTMLDivElement;
 const authLink = document.getElementById("auth-link") as HTMLAnchorElement;
+const authTokenInput = document.getElementById("auth-token-input") as HTMLInputElement;
+const authSubmit = document.getElementById("auth-submit") as HTMLButtonElement;
 const authDismiss = document.getElementById("auth-dismiss") as HTMLButtonElement;
 
 function normalizeUrl(raw: string): string {
@@ -472,23 +474,45 @@ helpOverlay.addEventListener("click", (e) => {
   }
 });
 
-// ─── Auth URL detection (from terminal bridge via postMessage) ───────────────
+// ─── Auth modal (from terminal bridge via postMessage) ───────────────────────
 
 // Track the last auth URL to avoid showing duplicates
 let lastAuthUrl = "";
+let authSuppressUntil = 0;
 
 window.addEventListener("message", (event) => {
   if (!event.data || event.data.type !== "browserbud:auth-url") return;
   const url = event.data.url;
   if (!url || url === lastAuthUrl) return;
+  if (Date.now() < authSuppressUntil) return;
   lastAuthUrl = url;
   authLink.href = url;
-  authLink.textContent = "Open login page";
-  authBanner.style.display = "flex";
+  authTokenInput.value = "";
+  authOverlay.classList.add("visible");
 });
 
 authDismiss.addEventListener("click", () => {
-  authBanner.style.display = "none";
+  authOverlay.classList.remove("visible");
+});
+
+authOverlay.addEventListener("click", (e) => {
+  if (e.target === authOverlay) {
+    authOverlay.classList.remove("visible");
+  }
+});
+
+authSubmit.addEventListener("click", () => {
+  const token = authTokenInput.value.trim();
+  if (!token) return;
+  typeInTerminal(token + "\r");
+  authOverlay.classList.remove("visible");
+  authTokenInput.value = "";
+  // Suppress re-detection for a few seconds while auth completes
+  authSuppressUntil = Date.now() + 5000;
+});
+
+authTokenInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") authSubmit.click();
 });
 
 // ─── Message listener (results from content scripts + typeInTerminal) ────────

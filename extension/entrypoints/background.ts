@@ -1,3 +1,20 @@
+// Background worker — Chrome MV3 service worker / Firefox MV2 persistent page.
+//
+// CHROME MV3 PITFALLS (these have caused repeated regressions):
+//
+// 1. Service worker lifetime: Chrome kills the worker as soon as all event
+//    callbacks return. Any async work (fetch, storage) must be returned as a
+//    Promise from the listener so Chrome knows to keep the worker alive.
+//    → Always `return asyncFn()` from onMessage listeners, never fire-and-forget.
+//
+// 2. Content script orphaning: Reloading the extension in chrome://extensions
+//    orphans content scripts on existing tabs — tabs.sendMessage() will throw.
+//    → Always handle sendMessage failure and fall back to browser.tabs.get()
+//    for basic context (URL, title). Never assume a content script is reachable.
+//
+// 3. API compat: Use browser.* (WXT), never chrome.* directly (except for
+//    Chrome-only APIs like chrome.sidePanel behind browser checks).
+
 import { storage } from "wxt/utils/storage";
 
 const SERVER_URL_KEY = "local:serverUrl";
@@ -31,20 +48,19 @@ async function sendTranscript(data: {
   source: string;
 }) {
   const serverUrl = await getServerUrl();
-  fetch(`${serverUrl}/api/transcript`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  })
-    .then((res) => res.json())
-    .then((result) => {
-      if (result.ok) {
-        console.log(`BrowserBud: transcript cached for ${data.videoId}`);
-      }
-    })
-    .catch((err) =>
-      console.error("BrowserBud: failed to send transcript", err),
-    );
+  try {
+    const res = await fetch(`${serverUrl}/api/transcript`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    const result = await res.json();
+    if (result.ok) {
+      console.log(`BrowserBud: transcript cached for ${data.videoId}`);
+    }
+  } catch (err) {
+    console.error("BrowserBud: failed to send transcript", err);
+  }
 }
 
 async function sendFrame(videoId: string, timestamp: number, image: string) {
@@ -82,12 +98,14 @@ export default defineBackground(() => {
     });
   }
 
-  // Forward context, transcript, and frame data from content scripts to the server
+  // Forward context, transcript, and frame data from content scripts to the server.
+  // Returning the promise keeps Chrome's MV3 service worker alive until the
+  // fetch completes (Firefox background pages don't need this but it's harmless).
   browser.runtime.onMessage.addListener((message) => {
     if (message.type === "context") {
-      sendContext(message.data);
+      return sendContext(message.data);
     } else if (message.type === "transcript") {
-      sendTranscript({
+      return sendTranscript({
         videoId: message.videoId,
         text: message.text,
         lang: message.lang,
@@ -95,11 +113,13 @@ export default defineBackground(() => {
         source: message.source,
       });
     } else if (message.type === "captureFrame") {
-      sendFrame(message.videoId, message.timestamp, message.image);
+      return sendFrame(message.videoId, message.timestamp, message.image);
     }
   });
 
-  // Shared helper: query the active tab's content script for context
+  // Shared helper: query the active tab's content script for context.
+  // Falls back to tab metadata when the content script isn't reachable
+  // (e.g. after extension reload in Chrome MV3, or on restricted pages).
   async function refreshContextForTab(tabId: number) {
     try {
       const response = await browser.tabs.sendMessage(tabId, {
@@ -107,9 +127,22 @@ export default defineBackground(() => {
       });
       if (response) {
         await sendContext(response);
+        return;
       }
     } catch {
-      // No content script on this tab — clear context
+      // Content script not reachable — fall through to tab metadata
+    }
+
+    // Fallback: construct basic context from tab metadata
+    try {
+      const tab = await browser.tabs.get(tabId);
+      if (tab.url && !/^(chrome|about|edge|brave):/.test(tab.url)) {
+        const site = new URL(tab.url).hostname.replace(/^www\./, "");
+        await sendContext({ site, title: tab.title || site, url: tab.url });
+      } else {
+        await sendContext({});
+      }
+    } catch {
       await sendContext({});
     }
   }

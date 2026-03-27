@@ -52,38 +52,103 @@
       font-size: 16px;
     }
 
-    /* Auth banner */
-    #auth-banner {
+    /* Auth modal */
+    #auth-overlay {
       display: none;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 14px;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 100;
+      align-items: start;
+      justify-content: center;
+      padding-top: 48px;
+      overflow-y: auto;
+    }
+    #auth-overlay.visible {
+      display: flex;
+    }
+    #auth-modal {
       background: #1a1a2e;
-      border-bottom: 1px solid #333;
-      color: #ccc;
-      font-size: 13px;
-      z-index: 60;
-    }
-    #auth-banner a {
-      color: #7c8aff;
-      text-decoration: underline;
-      word-break: break-all;
-      flex: 1;
-    }
-    #auth-banner a:hover {
-      color: #a0aaff;
-    }
-    #auth-banner button {
-      background: none;
-      border: none;
-      color: #888;
-      font-size: 18px;
-      cursor: pointer;
-      padding: 0 4px;
-      line-height: 1;
-    }
-    #auth-banner button:hover {
+      border-radius: 8px;
+      padding: 20px;
+      width: 340px;
+      max-width: 90%;
       color: #e0e0e0;
+      margin-bottom: 24px;
+    }
+    #auth-modal h3 {
+      font-size: 15px;
+      margin-bottom: 14px;
+    }
+    #auth-modal p {
+      font-size: 13px;
+      color: #aaa;
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+    #auth-modal .auth-step {
+      margin-bottom: 14px;
+    }
+    #auth-modal .auth-step .step-label {
+      font-size: 12px;
+      color: #c0c0ff;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    #auth-modal a.auth-url-btn {
+      display: block;
+      text-align: center;
+      padding: 8px 16px;
+      background: #5865f2;
+      color: #fff;
+      border-radius: 6px;
+      font-size: 13px;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    #auth-modal a.auth-url-btn:hover {
+      background: #4752c4;
+    }
+    #auth-modal input {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #111;
+      color: #e0e0e0;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+    #auth-modal input:focus {
+      outline: none;
+      border-color: #5865f2;
+    }
+    #auth-modal .btn-row {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 16px;
+    }
+    #auth-modal button {
+      padding: 6px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      border: none;
+    }
+    #auth-modal .btn-submit {
+      background: #5865f2;
+      color: #fff;
+    }
+    #auth-modal .btn-submit:hover {
+      background: #4752c4;
+    }
+    #auth-modal .btn-dismiss {
+      background: #333;
+      color: #ccc;
+    }
+    #auth-modal .btn-dismiss:hover {
+      background: #444;
     }
 
     /* Terminal iframe */
@@ -291,10 +356,26 @@
     <button class="settings-btn" id="settings-btn" title="Settings">&#9881;</button>
   </div>
 
-  <div id="auth-banner" style="display:none">
-    <span>Claude Code needs to log in.</span>
-    <a id="auth-link" href="#" target="_blank" rel="noopener">Open login page</a>
-    <button id="auth-dismiss" title="Dismiss">&times;</button>
+  <div id="auth-overlay">
+    <div id="auth-modal">
+      <h3>Claude Code Login</h3>
+      <p>Claude Code needs to authenticate. Open the link below to log in, then paste the code you receive back here.</p>
+
+      <div class="auth-step">
+        <div class="step-label">Step 1: Open the login page</div>
+        <a id="auth-link" class="auth-url-btn" href="#" target="_blank" rel="noopener">Open login page</a>
+      </div>
+
+      <div class="auth-step">
+        <div class="step-label">Step 2: Paste the code from the login page</div>
+        <input type="text" id="auth-token-input" placeholder="Paste your auth code here" autocomplete="off" spellcheck="false" />
+      </div>
+
+      <div class="btn-row">
+        <button class="btn-dismiss" id="auth-dismiss">Dismiss</button>
+        <button class="btn-submit" id="auth-submit">Submit</button>
+      </div>
+    </div>
   </div>
 
   <iframe id="terminal-frame" allow="clipboard-read; clipboard-write"></iframe>
