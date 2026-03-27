@@ -15,8 +15,10 @@ RUN TTYD_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x86_64") 
     curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${TTYD_ARCH}" \
     -o /usr/local/bin/ttyd && chmod +x /usr/local/bin/ttyd
 
-# ─── Claude Code CLI ────────────────────────────────────────────────────────
-RUN npm install -g @anthropic-ai/claude-code
+# ─── Claude Code CLI ─────────────────────────────────────────────────────────
+# Installed at runtime into a persistent volume (~/.local) so auto-updates
+# survive container restarts without rebuilding the image.
+ENV PATH="/home/bb/.local/bin:${PATH}"
 
 # ─── Non-root user ──────────────────────────────────────────────────────────
 # node:20-bookworm-slim already has user "node" (uid 1000, gid 1000).

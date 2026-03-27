@@ -11,6 +11,10 @@ services:
       # On first run: authenticate via the OAuth flow shown in the terminal.
       - ~/.browserbud/claude-config:/home/bb/.claude
 
+      # Claude Code binary — persisted so auto-updates survive restarts.
+      # First run installs it (~2 min), subsequent starts are instant.
+      - ~/.browserbud/claude-local:/home/bb/.local
+
       # Data directory: where Claude Code works (notes, cache, context)
       - ~/.browserbud/data:/home/bb/browse
 
