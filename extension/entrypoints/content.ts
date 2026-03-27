@@ -18,6 +18,82 @@ export default defineContentScript({
     // Cache of last known player time (populated by MAIN world responses)
     let lastPlayerTime: { currentTime: number; state: string } | null = null;
 
+    // ─── Orphan Detection ─────────────────────────────────────────────────
+    // When the extension updates, existing content scripts become orphaned —
+    // they lose their connection to the new background service worker.
+    // Detect this and show a per-tab banner prompting the user to refresh.
+
+    let isOrphaned = false;
+    let orphanBanner: HTMLElement | null = null;
+    let playerPollInterval: ReturnType<typeof setInterval> | null = null;
+
+    function safeSendMessage(msg: any): Promise<any> {
+      if (isOrphaned) return Promise.resolve();
+      try {
+        return browser.runtime.sendMessage(msg).catch((err: any) => {
+          if (String(err?.message).includes("Extension context invalidated")) {
+            markOrphaned();
+          }
+        });
+      } catch (err: any) {
+        if (String(err?.message).includes("Extension context invalidated")) {
+          markOrphaned();
+        }
+        return Promise.resolve();
+      }
+    }
+
+    function markOrphaned() {
+      if (isOrphaned) return;
+      isOrphaned = true;
+      console.warn("[BrowserBud] Extension context invalidated — content script orphaned");
+      if (playerPollInterval) {
+        clearInterval(playerPollInterval);
+        playerPollInterval = null;
+      }
+      removeCaptureButton();
+      showOrphanBanner();
+    }
+
+    function showOrphanBanner() {
+      if (orphanBanner) return;
+
+      orphanBanner = document.createElement("div");
+      orphanBanner.style.cssText = `
+        position: fixed; top: 0; left: 0; right: 0; z-index: 2147483647;
+        background: #1a1a2e; color: #e0e0e0; padding: 8px 16px;
+        font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        display: flex; align-items: center; gap: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      `;
+
+      const msg = document.createElement("span");
+      msg.textContent = "BrowserBud was updated. Refresh this tab to reconnect.";
+
+      const refreshBtn = document.createElement("button");
+      refreshBtn.textContent = "Refresh";
+      refreshBtn.style.cssText = `
+        background: #5865f2; color: white; border: none;
+        padding: 4px 12px; border-radius: 4px; cursor: pointer;
+        font-size: 12px; font-weight: 500;
+      `;
+      refreshBtn.addEventListener("click", () => location.reload());
+
+      const dismissBtn = document.createElement("button");
+      dismissBtn.textContent = "\u2715";
+      dismissBtn.style.cssText = `
+        background: none; border: none; color: #888;
+        cursor: pointer; font-size: 16px; padding: 0 4px; margin-left: auto;
+      `;
+      dismissBtn.addEventListener("click", () => {
+        orphanBanner?.remove();
+        orphanBanner = null;
+      });
+
+      orphanBanner.append(msg, refreshBtn, dismissBtn);
+      document.documentElement.appendChild(orphanBanner);
+    }
+
     function getContext() {
       const url = window.location.href;
       const title = document.title
@@ -48,7 +124,7 @@ export default defineContentScript({
 
     function sendContext() {
       const context = getContext();
-      browser.runtime.sendMessage({ type: "context", data: context });
+      safeSendMessage({ type: "context", data: context });
     }
 
     // ─── Frame Capture ────────────────────────────────────────────────────
@@ -85,7 +161,7 @@ export default defineContentScript({
 
       console.log("[BrowserBud] Frame captured, size:", imageData.length);
       const timestamp = video.currentTime;
-      browser.runtime.sendMessage({
+      safeSendMessage({
         type: "captureFrame",
         videoId,
         timestamp,
@@ -98,6 +174,7 @@ export default defineContentScript({
     let captureBtn: HTMLButtonElement | null = null;
 
     function injectCaptureButton() {
+      if (isOrphaned) return;
       if (captureBtn) return;
       if (!window.location.href.includes("/watch")) return;
 
@@ -216,7 +293,7 @@ export default defineContentScript({
     sendContext();
 
     // Poll player time every 5s so context includes approximate position
-    setInterval(() => {
+    playerPollInterval = setInterval(() => {
       requestPlayerTime();
     }, 5000);
     // Initial request after MAIN world script loads
@@ -248,11 +325,11 @@ export default defineContentScript({
     }
 
     // Announce capabilities
-    browser.runtime.sendMessage({
+    safeSendMessage({
       type: "contentScriptReady",
       capabilities: ["getContext", "extractTranscript", "extractComments", "getPlayerState", "getPageContent"],
       url: window.location.href,
-    }).catch(() => {}); // side panel may not be open yet
+    });
 
     // Listen for messages from MAIN world content script
     window.addEventListener("message", (event) => {
@@ -260,7 +337,7 @@ export default defineContentScript({
 
       if (event.data?.type === "BROWSERBUD_TRANSCRIPT") {
         const { videoId, text, lang, meta } = event.data;
-        browser.runtime.sendMessage({
+        safeSendMessage({
           type: "transcript",
           videoId,
           text,
@@ -269,7 +346,7 @@ export default defineContentScript({
           source: "client",
         });
       } else if (event.data?.type === "BROWSERBUD_EXTRACT_TRANSCRIPT_RESULT") {
-        browser.runtime.sendMessage({
+        safeSendMessage({
           type: "transcriptResult",
           requestId: event.data.requestId,
           success: event.data.success,
@@ -279,7 +356,7 @@ export default defineContentScript({
           error: event.data.error,
         });
       } else if (event.data?.type === "BROWSERBUD_EXTRACT_COMMENTS_RESULT") {
-        browser.runtime.sendMessage({
+        safeSendMessage({
           type: "commentsResult",
           requestId: event.data.requestId,
           success: event.data.success,
@@ -299,7 +376,7 @@ export default defineContentScript({
         // Only forward to background if it's a real request (not our poll)
         if (event.data.requestId !== "__context_poll__") {
           const { type: _ignored, ...rest } = event.data;
-          browser.runtime.sendMessage({
+          safeSendMessage({
             type: "playerStateResult",
             ...rest,
           });
