@@ -640,10 +640,6 @@ function handleExtractPageContent(req, res) {
         // Extension sends pruned HTML — convert to Markdown server-side
         const markdown = htmlToMarkdown(result.html);
 
-        // Save to context directory
-        const contentPath = path.join(CONTEXT_DIR, "page-content.txt");
-        fs.mkdirSync(CONTEXT_DIR, { recursive: true });
-        fs.writeFileSync(contentPath, markdown);
         log.info({ htmlChars: result.html.length, mdChars: markdown.length, title: result.title }, "page content extracted");
 
         res.writeHead(200, { "Content-Type": "application/json" });

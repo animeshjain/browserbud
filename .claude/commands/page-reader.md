@@ -8,21 +8,40 @@ When the user is on a non-YouTube page and asks about the page content, use this
 
 ### Extract page content
 ```bash
-npm run --prefix skills/page-reader cli -- read [--max-chars 50000]
+npm run --prefix skills/page-reader cli -- read [--max-chars 50000] [--force] [--url "<url>"]
 ```
-Requests the page content from the browser extension, saves it to `context/page-content.txt`, and reports the size. The extension extracts text from `<article>`, `<main>`, or the body (stripping nav, header, footer, scripts, etc.).
+Requests the page content from the browser extension, converts it to Markdown, and caches it to `cache/web/{domain}/{slug}/content.md`. If the page is already cached, prints the cache path and skips extraction (use `--force` to re-fetch).
+
+Options:
+- `--max-chars <n>` — Maximum characters to extract (default: 50000)
+- `--force` — Re-fetch even if cached
+- `--url <url>` — Extract a specific URL (default: current tab from `context/current.json`)
 
 ### Show cached page content
 ```bash
-npm run --prefix skills/page-reader cli -- show
+npm run --prefix skills/page-reader cli -- show [--url "<url>"]
 ```
-Prints the last extracted page content from `context/page-content.txt`.
+Prints the cached content for a URL. If `--url` is omitted, uses the current tab URL from `context/current.json`.
+
+### List cached pages
+```bash
+npm run --prefix skills/page-reader cli -- list
+```
+Lists all cached web pages with their domains, titles, URLs, and sizes.
+
+## Caching
+
+Page content is cached at `cache/web/{domain}/{slug}/`. Each cached page has:
+- `content.md` — page content with metadata header (title, URL, cache timestamp)
+- `meta.json` — structured metadata (url, title, domain, cachedAt, contentChars)
+
+Cache is permanent — pages are not re-fetched unless `--force` is passed. The cache key is derived from the canonicalized URL (stripped of tracking params, www prefix, fragments, and trailing slashes), so the same page always maps to the same cache directory regardless of how the URL was formatted.
 
 ## Workflow
 
 1. Check `context/current.json` to see what page the user is on
 2. Run `read` to extract the page content from the browser
-3. Read the output or run `show` to see the full text
+3. Read the cache path printed by the CLI (e.g., `cache/web/example.com/some-page_a1b2c3d4/content.md`)
 4. Answer the user's question grounded in the actual page content
 
 ## When to use

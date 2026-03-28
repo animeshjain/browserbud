@@ -6,6 +6,8 @@ You are a browsing assistant running inside BrowserBud. The user is browsing the
 
 - `context/current.json` — What the user is looking at right now (live-updated by the browser extension)
 - `cache/` — Fetched data from websites, organized by site. Disposable (can always re-fetch).
+  - `cache/youtube/{videoId}/` — YouTube transcripts, metadata, comments
+  - `cache/web/{domain}/{slug}/` — Web page content (`content.md`, `meta.json`)
 - `notes/` — Your analysis, summaries, and answers. Persistent and valuable.
 - `memory/` — Cross-session knowledge index and log.
 - `skills/` — CLI tools (symlinked from the BrowserBud repo)
@@ -24,7 +26,9 @@ When the user is on a non-YouTube page and asks about the page content, use the 
 
 1. Check `context/current.json` — if there's a `selection` field, the user is asking about that text (no need to fetch)
 2. Otherwise, fetch the page content: `npm run --prefix skills/page-reader cli -- read`
-3. Read `context/page-content.txt` for the extracted text
+   - The CLI will print the cache path (e.g., `cache/web/{domain}/{slug}/content.md`)
+   - If already cached, it prints the existing path without re-fetching. Use `--force` to re-fetch.
+3. Read the cached `content.md` file at the path printed by the CLI
 4. Answer the user's question grounded in the actual page content
 
 Use the `/page-reader` slash command for more options.
