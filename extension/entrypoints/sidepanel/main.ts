@@ -8,6 +8,7 @@ const setupScreen = document.getElementById("setup-screen") as HTMLDivElement;
 const setupUrl = document.getElementById("setup-url") as HTMLInputElement;
 const setupConnect = document.getElementById("setup-connect") as HTMLButtonElement;
 const setupError = document.getElementById("setup-error") as HTMLDivElement;
+const summarizeBtn = document.getElementById("summarize-btn") as HTMLButtonElement;
 const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
 const settingsOverlay = document.getElementById("settings-overlay") as HTMLDivElement;
 const settingsUrl = document.getElementById("settings-url") as HTMLInputElement;
@@ -618,6 +619,82 @@ browser.windows.onFocusChanged.addListener(async (windowId) => {
   } catch {}
 });
 
+// ─── Summarize Button ────────────────────────────────────────────────────────
+
+let currentVideoId: string | null = null;
+let cacheCheckTimer: ReturnType<typeof setInterval> | null = null;
+
+function extractVideoId(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes("youtube.com") && u.pathname === "/watch") {
+      return u.searchParams.get("v");
+    }
+  } catch {}
+  return null;
+}
+
+async function checkTranscriptCached(videoId: string): Promise<boolean> {
+  if (!currentServerUrl) return false;
+  try {
+    const res = await fetch(`${currentServerUrl}/api/transcript-status/${videoId}`);
+    if (!res.ok) return false;
+    const data = await res.json();
+    return !!data.cached;
+  } catch {
+    return false;
+  }
+}
+
+function updateSummarizeButton(videoId: string | null) {
+  if (cacheCheckTimer) { clearInterval(cacheCheckTimer); cacheCheckTimer = null; }
+
+  if (!videoId) {
+    currentVideoId = null;
+    summarizeBtn.disabled = true;
+    return;
+  }
+
+  currentVideoId = videoId;
+  summarizeBtn.disabled = true; // disabled until we confirm cache
+
+  const vid = videoId; // capture for closure (non-null)
+
+  // Check immediately, then poll every 2s until cached
+  async function poll() {
+    if (currentVideoId !== vid) return; // stale
+    const cached = await checkTranscriptCached(vid);
+    if (currentVideoId !== vid) return; // stale
+    if (cached) {
+      summarizeBtn.disabled = false;
+      if (cacheCheckTimer) { clearInterval(cacheCheckTimer); cacheCheckTimer = null; }
+    }
+  }
+
+  poll();
+  cacheCheckTimer = setInterval(poll, 2000);
+}
+
+summarizeBtn.addEventListener("click", () => {
+  if (summarizeBtn.disabled || !currentVideoId) return;
+  typeInTerminal(`/yt-research Summarize this video: https://www.youtube.com/watch?v=${currentVideoId}\r`);
+});
+
+// Update summarize button when active tab changes
+browser.tabs.onActivated.addListener(async ({ tabId }) => {
+  try {
+    const tab = await browser.tabs.get(tabId);
+    updateSummarizeButton(extractVideoId(tab.url));
+  } catch {}
+});
+
+// Also pick up URL changes within the same tab (YouTube SPA navigation)
+browser.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (!tab.active || !changeInfo.url) return;
+  updateSummarizeButton(extractVideoId(changeInfo.url));
+});
+
 // ─── Init ────────────────────────────────────────────────────────────────────
 
 (async () => {
@@ -628,4 +705,12 @@ browser.windows.onFocusChanged.addListener(async (windowId) => {
   } else {
     showSetup();
   }
+
+  // Initialize summarize button for current tab
+  try {
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    if (tab?.url) {
+      updateSummarizeButton(extractVideoId(tab.url));
+    }
+  } catch {}
 })();

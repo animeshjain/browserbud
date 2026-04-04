@@ -13,6 +13,8 @@ import {
   loadCachedMeta,
   listCachedVideos,
   videoDir,
+  isPromoted,
+  promoteToNotes,
 } from "./cache.js";
 
 function parseDurationToSeconds(duration: string): number | null {
@@ -40,6 +42,10 @@ async function transcriptCommand(
     const dir = videoDir(videoId);
     console.log(`Already cached: ${dir}/transcript.md`);
     console.log(`Use --force to re-fetch.`);
+    if (!isPromoted(videoId)) {
+      const notesPath = promoteToNotes(videoId);
+      console.log(`Promoted to notes: ${notesPath}/`);
+    }
     return;
   }
 
@@ -61,6 +67,10 @@ async function transcriptCommand(
   console.log(`  transcript.txt — raw text`);
   if (result.timedText) console.log(`  transcript_timed.txt — timestamped lines`);
   console.log(`  meta.json      — video metadata`);
+
+  // Promote to persistent notes
+  const notesPath = promoteToNotes(videoId);
+  console.log(`Promoted to notes: ${notesPath}/`);
 }
 
 async function commentsCommand(

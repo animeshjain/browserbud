@@ -1056,6 +1056,23 @@ const server = http.createServer((req, res) => {
     return handleBridgeLog(req, res);
   }
 
+  if (req.url?.startsWith("/api/transcript-status/")) {
+    const videoId = req.url.split("/api/transcript-status/")[1];
+    if (!videoId) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "videoId is required" }));
+      return;
+    }
+    const videoDir = path.join(CACHE_DIR, videoId);
+    const hasTimed = fs.existsSync(path.join(videoDir, "transcript_timed.txt"));
+    const hasPlain = fs.existsSync(path.join(videoDir, "transcript.txt"));
+    const hasMd = fs.existsSync(path.join(videoDir, "transcript.md"));
+    const cached = hasTimed || hasPlain || hasMd;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ videoId, cached, hasTimed, hasPlain, hasMd }));
+    return;
+  }
+
   if (req.url === "/api/session") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({

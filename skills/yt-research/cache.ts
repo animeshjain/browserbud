@@ -4,9 +4,10 @@ import {
   readFileSync,
   writeFileSync,
   readdirSync,
+  copyFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { VIDEOS_DIR } from "./config.js";
+import { VIDEOS_DIR, NOTES_YOUTUBE_DIR } from "./config.js";
 import type { VideoMeta, CachedVideo, CommentsResult } from "./types.js";
 
 export function videoDir(videoId: string): string {
@@ -62,6 +63,31 @@ export function loadCachedComments(videoId: string): CommentsResult | null {
   const commentsPath = join(videoDir(videoId), "comments.json");
   if (!existsSync(commentsPath)) return null;
   return JSON.parse(readFileSync(commentsPath, "utf-8")) as CommentsResult;
+}
+
+// Copy transcript files from cache to notes/youtube/{videoId}/ for persistent storage.
+// Called when a video is summarized (i.e., the user showed interest in it).
+const PROMOTE_FILES = ["transcript.md", "transcript.txt", "transcript_timed.txt", "meta.json"];
+
+export function notesDir(videoId: string): string {
+  return join(NOTES_YOUTUBE_DIR, videoId);
+}
+
+export function isPromoted(videoId: string): boolean {
+  return existsSync(join(notesDir(videoId), "transcript.md"));
+}
+
+export function promoteToNotes(videoId: string): string {
+  const src = videoDir(videoId);
+  const dst = notesDir(videoId);
+  mkdirSync(dst, { recursive: true });
+  for (const file of PROMOTE_FILES) {
+    const srcFile = join(src, file);
+    if (existsSync(srcFile)) {
+      copyFileSync(srcFile, join(dst, file));
+    }
+  }
+  return dst;
 }
 
 export function listCachedVideos(): CachedVideo[] {

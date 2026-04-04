@@ -127,6 +127,27 @@ export default defineContentScript({
       safeSendMessage({ type: "context", data: context });
     }
 
+    // ─── Proactive Transcript Caching ─────────────────────────────────────
+    // Automatically extract and cache the transcript as soon as we land on a
+    // YouTube video page, so it's ready before the user asks for a summary.
+
+    let autoCacheVideoId: string | null = null; // tracks in-flight auto-cache
+
+    function autoCacheTranscript() {
+      const videoId = getVideoId();
+      if (!videoId || autoCacheVideoId === videoId) return;
+      autoCacheVideoId = videoId;
+      console.log(`[BrowserBud] Auto-caching transcript for ${videoId}`);
+      window.postMessage(
+        {
+          type: "BROWSERBUD_EXTRACT_TRANSCRIPT",
+          videoId,
+          requestId: `__auto_cache__:${videoId}`,
+        },
+        "*",
+      );
+    }
+
     // ─── Frame Capture ────────────────────────────────────────────────────
 
     function captureFrame() {
@@ -311,17 +332,20 @@ export default defineContentScript({
     document.addEventListener("yt-navigate-finish", () => {
       // Title needs a moment to update after navigation
       lastPlayerTime = null;
+      autoCacheVideoId = null; // reset so new video gets auto-cached
       setTimeout(() => {
         sendContext();
         removeCaptureButton();
         injectCaptureButton();
         requestPlayerTime();
+        autoCacheTranscript();
       }, 1500);
     });
 
-    // Initial injection
+    // Initial injection + auto-cache on first load
     if (window.location.href.includes("/watch")) {
       setTimeout(injectCaptureButton, 1500);
+      setTimeout(autoCacheTranscript, 2000);
     }
 
     // Announce capabilities
@@ -346,15 +370,35 @@ export default defineContentScript({
           source: "client",
         });
       } else if (event.data?.type === "BROWSERBUD_EXTRACT_TRANSCRIPT_RESULT") {
-        safeSendMessage({
-          type: "transcriptResult",
-          requestId: event.data.requestId,
-          success: event.data.success,
-          text: event.data.text,
-          lang: event.data.lang,
-          meta: event.data.meta,
-          error: event.data.error,
-        });
+        const reqId = event.data.requestId as string;
+        if (reqId?.startsWith("__auto_cache__:")) {
+          // Proactive auto-cache result — send as transcript for server-side caching
+          if (event.data.success) {
+            const vid = reqId.replace("__auto_cache__:", "");
+            console.log(`[BrowserBud] Auto-cached transcript for ${vid} (${event.data.text?.length || 0} chars)`);
+            safeSendMessage({
+              type: "transcript",
+              videoId: vid,
+              text: event.data.text,
+              lang: event.data.lang,
+              meta: event.data.meta,
+              source: "client",
+            });
+          } else {
+            console.warn(`[BrowserBud] Auto-cache failed: ${event.data.error}`);
+          }
+        } else {
+          // Explicit request result — forward to server with requestId
+          safeSendMessage({
+            type: "transcriptResult",
+            requestId: reqId,
+            success: event.data.success,
+            text: event.data.text,
+            lang: event.data.lang,
+            meta: event.data.meta,
+            error: event.data.error,
+          });
+        }
       } else if (event.data?.type === "BROWSERBUD_EXTRACT_COMMENTS_RESULT") {
         safeSendMessage({
           type: "commentsResult",

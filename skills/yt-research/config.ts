@@ -11,6 +11,7 @@ export const SCRAPECREATORS_API_KEY = process.env.SCRAPECREATORS_API_KEY || "";
 const DATA_DIR = process.env.BROWSERBUD_DATA_DIR;
 export const OUTPUT_DIR = DATA_DIR ? join(DATA_DIR, "cache") : join(__dirname, "output");
 export const VIDEOS_DIR = DATA_DIR ? join(DATA_DIR, "cache", "youtube") : join(__dirname, "output", "videos");
+export const NOTES_YOUTUBE_DIR = DATA_DIR ? join(DATA_DIR, "notes", "youtube") : join(__dirname, "output", "notes", "youtube");
 
 // Supadata request timeout
 export const REQUEST_TIMEOUT_MS = 65_000;
