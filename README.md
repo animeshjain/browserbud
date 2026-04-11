@@ -129,6 +129,14 @@ This starts the proxy, waits for the MCP port, and launches ttyd with Claude Cod
 Go to a YouTube video. Claude Code's status line updates with the video title. Ask it to summarize the video - it
 fetches the transcript and responds.
 
+## Makefile targets
+
+| Target | Description |
+|--------|-------------|
+| `make extension` | Build the browser extension (`extension/dist/`) |
+| `make docker` | Build the Docker image |
+| `make up` | Start the Docker container |
+
 ## Project structure
 
 ```
