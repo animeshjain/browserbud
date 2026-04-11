@@ -6,6 +6,8 @@ import {
   savePage,
   pageDir,
   listCachedPages,
+  isPromoted,
+  promoteToNotes,
 } from "./cache.js";
 
 if (!process.env.BROWSERBUD_PORT) {
@@ -43,6 +45,10 @@ async function readCommand(
     const dir = pageDir(knownUrl);
     console.log(`Already cached: ${dir}/content.md`);
     console.log(`Use --force to re-fetch.`);
+    if (!isPromoted(knownUrl)) {
+      const notesPath = promoteToNotes(knownUrl);
+      console.log(`Promoted to notes: ${notesPath}/`);
+    }
     return;
   }
 
@@ -86,12 +92,16 @@ async function readCommand(
   // Save to cache
   const cacheDir = savePage(url, title, text + truncationNote);
 
+  // Promote to persistent notes
+  const notesPath = promoteToNotes(url);
+
   console.log(`Title: ${title}`);
   console.log(`URL:   ${url}`);
   console.log(
     `Size:  ${content.length} chars${truncated ? ` (truncated to ${maxChars})` : ""}`,
   );
   console.log(`\nSaved to: ${cacheDir}/`);
+  console.log(`Promoted to notes: ${notesPath}/`);
 }
 
 async function showCommand(targetUrl?: string): Promise<void> {

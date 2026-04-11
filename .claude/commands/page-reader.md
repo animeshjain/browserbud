@@ -44,12 +44,23 @@ Cache is permanent — pages are not re-fetched unless `--force` is passed. The 
 3. Read the cache path printed by the CLI (e.g., `cache/web/example.com/some-page_a1b2c3d4/content.md`)
 4. Answer the user's question grounded in the actual page content
 
+## Summarize Workflow
+
+When invoked with "Summarize this page: <url>" (typically from the Summarize button), the page content has already been cached by the server. Follow this flow:
+
+1. Run `read --url "<url>"` — this confirms the cache exists and promotes the page to `notes/web/` for persistent storage
+2. Read the `content.md` file from the cache path printed by the CLI
+3. Produce a concise, well-structured summary of the page content
+
+The `read` command automatically promotes cached pages to `notes/web/{domain}/{slug}/` (copies `content.md` and `meta.json`), similar to how yt-research promotes transcripts to `notes/youtube/`.
+
 ## When to use
 
 - User asks "what does this page say", "summarize this page", "what is this about"
 - User asks a question that requires reading the page content
 - User is on a non-YouTube webpage and asks about something on the page
 - User says "read this", "look at this page", "what am I looking at"
+- User clicked the Summarize button (invoked with "Summarize this page: <url>")
 
 If the user has text selected (check `context/current.json` for a `selection` field), prefer using the selection text directly — you don't need to fetch the full page.
 

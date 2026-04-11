@@ -621,6 +621,9 @@ browser.windows.onFocusChanged.addListener(async (windowId) => {
 
 // ─── Summarize Button ────────────────────────────────────────────────────────
 
+type PageMode = "youtube" | "web" | "unsupported";
+let currentPageMode: PageMode = "unsupported";
+let currentPageUrl: string | null = null;
 let currentVideoId: string | null = null;
 let cacheCheckTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -647,7 +650,7 @@ async function checkTranscriptCached(videoId: string): Promise<boolean> {
   }
 }
 
-function updateSummarizeButton(videoId: string | null) {
+function updateYoutubeSummarize(videoId: string | null) {
   if (cacheCheckTimer) { clearInterval(cacheCheckTimer); cacheCheckTimer = null; }
 
   if (!videoId) {
@@ -676,23 +679,94 @@ function updateSummarizeButton(videoId: string | null) {
   cacheCheckTimer = setInterval(poll, 2000);
 }
 
-summarizeBtn.addEventListener("click", () => {
-  if (summarizeBtn.disabled || !currentVideoId) return;
-  typeInTerminal(`/yt-research Summarize this video: https://www.youtube.com/watch?v=${currentVideoId}\r`);
+function updateSummarizeForTab(url: string | undefined) {
+  if (cacheCheckTimer) { clearInterval(cacheCheckTimer); cacheCheckTimer = null; }
+
+  if (!url) {
+    currentPageMode = "unsupported";
+    currentVideoId = null;
+    currentPageUrl = null;
+    summarizeBtn.disabled = true;
+    summarizeBtn.title = "Summarize";
+    return;
+  }
+
+  const videoId = extractVideoId(url);
+  if (videoId) {
+    currentPageMode = "youtube";
+    currentPageUrl = url;
+    summarizeBtn.title = "Summarize this video";
+    updateYoutubeSummarize(videoId);
+  } else if (url.startsWith("http://") || url.startsWith("https://")) {
+    currentPageMode = "web";
+    currentVideoId = null;
+    currentPageUrl = url;
+    summarizeBtn.disabled = false;
+    summarizeBtn.title = "Summarize this page";
+  } else {
+    currentPageMode = "unsupported";
+    currentVideoId = null;
+    currentPageUrl = null;
+    summarizeBtn.disabled = true;
+    summarizeBtn.title = "Summarize";
+  }
+}
+
+const summarizeBtnDefaultHTML = summarizeBtn.innerHTML;
+
+async function handleWebPageSummarize(url: string) {
+  if (!currentServerUrl) return;
+
+  // Show loading state
+  summarizeBtn.disabled = true;
+  summarizeBtn.innerHTML = "<span>Caching\u2026</span>";
+
+  try {
+    const res = await fetch(`${currentServerUrl}/api/cache-page`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      console.error("BrowserBud: cache page failed:", (data as any).error || res.status);
+      return;
+    }
+
+    const data = await res.json() as { ok: boolean; url?: string; error?: string };
+    if (data.ok && data.url) {
+      typeInTerminal(`/page-reader Summarize this page: ${data.url}\r`);
+    }
+  } catch (err) {
+    console.error("BrowserBud: cache page error:", err);
+  } finally {
+    summarizeBtn.innerHTML = summarizeBtnDefaultHTML;
+    summarizeBtn.disabled = false;
+  }
+}
+
+summarizeBtn.addEventListener("click", async () => {
+  if (summarizeBtn.disabled) return;
+
+  if (currentPageMode === "youtube" && currentVideoId) {
+    typeInTerminal(`/yt-research Summarize this video: https://www.youtube.com/watch?v=${currentVideoId}\r`);
+  } else if (currentPageMode === "web" && currentPageUrl) {
+    await handleWebPageSummarize(currentPageUrl);
+  }
 });
 
 // Update summarize button when active tab changes
 browser.tabs.onActivated.addListener(async ({ tabId }) => {
   try {
     const tab = await browser.tabs.get(tabId);
-    updateSummarizeButton(extractVideoId(tab.url));
+    updateSummarizeForTab(tab.url);
   } catch {}
 });
 
-// Also pick up URL changes within the same tab (YouTube SPA navigation)
+// Also pick up URL changes within the same tab (SPA navigation, etc.)
 browser.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   if (!tab.active || !changeInfo.url) return;
-  updateSummarizeButton(extractVideoId(changeInfo.url));
+  updateSummarizeForTab(changeInfo.url);
 });
 
 // ─── Init ────────────────────────────────────────────────────────────────────
@@ -710,7 +784,7 @@ browser.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   try {
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
     if (tab?.url) {
-      updateSummarizeButton(extractVideoId(tab.url));
+      updateSummarizeForTab(tab.url);
     }
   } catch {}
 })();

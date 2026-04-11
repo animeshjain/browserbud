@@ -7,3 +7,4 @@ context.json
 server/.claude/
 server/bridge/*.built.js
 temp/
+.idea/

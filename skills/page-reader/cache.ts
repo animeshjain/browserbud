@@ -4,6 +4,7 @@ import {
   readFileSync,
   writeFileSync,
   readdirSync,
+  copyFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -12,6 +13,7 @@ const DATA_DIR =
   process.env.BROWSERBUD_DATA_DIR ||
   join(process.env.HOME || "~", "browse");
 export const WEB_CACHE_DIR = join(DATA_DIR, "cache", "web");
+export const NOTES_WEB_DIR = join(DATA_DIR, "notes", "web");
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -187,4 +189,30 @@ export function listCachedPages(): CachedPage[] {
   }
 
   return pages;
+}
+
+// ─── Notes Promotion ───────────────────────────────────────────────────────
+
+const PROMOTE_FILES = ["content.md", "meta.json"];
+
+export function notesDir(rawUrl: string): string {
+  const { domain, dirName } = cacheKeyForUrl(rawUrl);
+  return join(NOTES_WEB_DIR, domain, dirName);
+}
+
+export function isPromoted(rawUrl: string): boolean {
+  return existsSync(join(notesDir(rawUrl), "content.md"));
+}
+
+export function promoteToNotes(rawUrl: string): string {
+  const src = pageDir(rawUrl);
+  const dst = notesDir(rawUrl);
+  mkdirSync(dst, { recursive: true });
+  for (const file of PROMOTE_FILES) {
+    const srcFile = join(src, file);
+    if (existsSync(srcFile)) {
+      copyFileSync(srcFile, join(dst, file));
+    }
+  }
+  return dst;
 }

@@ -33,6 +33,76 @@ const DATA_DIR = process.env.BROWSERBUD_DATA_DIR || path.join(os.homedir(), "bro
 const CONTEXT_DIR = path.join(DATA_DIR, "context");
 const CONTEXT_FILE = path.join(CONTEXT_DIR, "current.json");
 const CACHE_DIR = path.join(DATA_DIR, "cache", "youtube");
+const WEB_CACHE_DIR = path.join(DATA_DIR, "cache", "web");
+const crypto = require("crypto");
+
+// ─── Web page cache helpers (mirrors skills/page-reader/cache.ts) ──────────
+
+const TRACKING_PARAMS = /^(utm_\w+|fbclid|gclid|ref|mc_cid|mc_eid|_ga|_gl)$/;
+
+function canonicalizeUrl(rawUrl) {
+  let normalized = rawUrl;
+  if (!/^https?:\/\//i.test(normalized)) normalized = "https://" + normalized;
+  const u = new URL(normalized);
+  u.hostname = u.hostname.toLowerCase().replace(/^www\./, "");
+  const keysToDelete = [];
+  for (const key of u.searchParams.keys()) {
+    if (TRACKING_PARAMS.test(key)) keysToDelete.push(key);
+  }
+  for (const key of keysToDelete) u.searchParams.delete(key);
+  u.searchParams.sort();
+  u.hash = "";
+  if (u.pathname.length > 1 && u.pathname.endsWith("/")) {
+    u.pathname = u.pathname.slice(0, -1);
+  }
+  return u.toString();
+}
+
+function webCacheKeyForUrl(rawUrl) {
+  const canonUrl = canonicalizeUrl(rawUrl);
+  const u = new URL(canonUrl);
+  const domain = u.hostname;
+  let slug = (u.pathname + u.search)
+    .replace(/^\//, "")
+    .replace(/\//g, "_")
+    .replace(/[^a-z0-9_-]/gi, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase();
+  if (slug.length > 80) slug = slug.slice(0, 80);
+  const hash = crypto.createHash("sha256").update(canonUrl).digest("hex").slice(0, 8);
+  const dirName = slug ? `${slug}_${hash}` : `_root_${hash}`;
+  return { domain, dirName, canonicalUrl: canonUrl };
+}
+
+function webPageDir(rawUrl) {
+  const { domain, dirName } = webCacheKeyForUrl(rawUrl);
+  return path.join(WEB_CACHE_DIR, domain, dirName);
+}
+
+function isWebPageCached(rawUrl) {
+  return fs.existsSync(path.join(webPageDir(rawUrl), "content.md"));
+}
+
+function saveWebPage(rawUrl, title, markdownContent) {
+  const { domain, dirName, canonicalUrl } = webCacheKeyForUrl(rawUrl);
+  const dir = path.join(WEB_CACHE_DIR, domain, dirName);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const header = `# ${title}\n\n- **URL:** ${rawUrl}\n- **Cached:** ${new Date().toISOString()}\n\n---\n\n`;
+  fs.writeFileSync(path.join(dir, "content.md"), header + markdownContent);
+
+  const meta = {
+    url: rawUrl,
+    canonicalUrl,
+    title,
+    domain,
+    cachedAt: new Date().toISOString(),
+    contentChars: markdownContent.length,
+  };
+  fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+  return dir;
+}
 
 // ─── Terminal Bridge Script ─────────────────────────────────────────────────
 // Built from server/bridge/terminal_bridge.ts via `npm run build:bridge`.
@@ -663,6 +733,61 @@ function handleExtractPageContent(req, res) {
   });
 }
 
+function handleCachePage(req, res) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
+    return;
+  }
+
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", async () => {
+    try {
+      log.info("requesting page content for caching");
+      const result = await sendExtensionCommand({
+        type: "get-page-content",
+      }, 15000);
+
+      if (!result.success) {
+        log.warn({ error: result.error }, "page cache: extraction failed");
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: result.error || "Extraction failed" }));
+        return;
+      }
+
+      const url = result.url;
+
+      // If already cached, skip re-extraction
+      if (isWebPageCached(url)) {
+        log.info({ url }, "page already cached, skipping");
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, url, title: result.title, cached: true }));
+        return;
+      }
+
+      const markdown = htmlToMarkdown(result.html);
+      const MAX_CHARS = 50000;
+      const truncated = markdown.length > MAX_CHARS;
+      const text = truncated ? markdown.slice(0, MAX_CHARS) : markdown;
+      const truncationNote = truncated
+        ? `\n\n[Truncated at ${MAX_CHARS} chars — ${markdown.length} total]`
+        : "";
+
+      const cacheDir = saveWebPage(url, result.title, text + truncationNote);
+      log.info({ url, mdChars: markdown.length, cacheDir }, "page cached");
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, url, title: result.title, cached: true }));
+    } catch (err) {
+      const isNoPanel = err.message.includes("no_active_panel_session");
+      log.error({ err: err.message }, "cache-page error");
+      res.writeHead(isNoPanel ? 503 : 502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message, code: isNoPanel ? "no_active_panel_session" : "extension_error" }));
+    }
+  });
+}
+
 function handleGetPlayerState(req, res) {
   if (req.method !== "POST") {
     res.writeHead(405, { "Content-Type": "application/json" });
@@ -1046,6 +1171,10 @@ const server = http.createServer((req, res) => {
 
   if (req.url === "/api/extract-page-content") {
     return handleExtractPageContent(req, res);
+  }
+
+  if (req.url === "/api/cache-page") {
+    return handleCachePage(req, res);
   }
 
   if (req.url === "/api/clipboard") {
