@@ -8,3 +8,4 @@ server/.claude/
 server/bridge/*.built.js
 temp/
 .idea/
+*.iml
