@@ -14,6 +14,7 @@ const settingsOverlay = document.getElementById("settings-overlay") as HTMLDivEl
 const settingsUrl = document.getElementById("settings-url") as HTMLInputElement;
 const settingsSave = document.getElementById("settings-save") as HTMLButtonElement;
 const settingsCancel = document.getElementById("settings-cancel") as HTMLButtonElement;
+const clearBtn = document.getElementById("clear-btn") as HTMLButtonElement;
 const helpBtn = document.getElementById("help-btn") as HTMLButtonElement;
 const helpOverlay = document.getElementById("help-overlay") as HTMLDivElement;
 const helpClose = document.getElementById("help-close") as HTMLButtonElement;
@@ -484,6 +485,11 @@ settingsSave.addEventListener("click", async () => {
 
 settingsUrl.addEventListener("keydown", (e) => {
   if (e.key === "Enter") settingsSave.click();
+});
+
+// Clear button — sends /clear to Claude Code
+clearBtn.addEventListener("click", () => {
+  typeInTerminal("/clear\r");
 });
 
 // Help modal
