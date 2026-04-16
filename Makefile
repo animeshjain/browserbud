@@ -1,4 +1,4 @@
-.PHONY: extension docker up
+.PHONY: extension docker up podman podman-up
 
 extension:
 	cd extension && npm run build
@@ -8,3 +8,9 @@ docker:
 
 up:
 	docker compose up
+
+podman:
+	podman-compose build
+
+podman-up:
+	podman-compose up
