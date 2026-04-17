@@ -13,4 +13,4 @@ podman:
 	podman-compose build
 
 podman-up:
-	podman-compose up
+	podman-compose up --force-recreate

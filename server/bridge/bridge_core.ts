@@ -81,20 +81,48 @@ export function exitSelectionMode(
   return sentEsc;
 }
 
-// Exit selection/copy mode and send text to terminal.
-// Adds a delay after ESC so tmux doesn't interpret ESC + first char
-// as an Alt+key escape sequence.
+// Delay after ESC so tmux doesn't interpret ESC + first char as Alt+key.
+const POST_ESC_DELAY_MS = 50;
+// Gap between the body and a trailing \r. Claude Code's input treats a
+// single burst (body + \r) as a paste and keeps the newline inline; a
+// separate \r after the paste window closes lands as Enter/submit.
+const SUBMIT_GAP_MS = 80;
+
+// Exit selection/copy mode and send text to terminal. If the text ends
+// with \r, the Enter is sent as a separate delayed keypress so it
+// submits instead of getting absorbed as a literal newline.
 export function sendTextToTerminal(
   state: BridgeState,
   deps: BridgeDeps,
   text: string,
 ): void {
   if (!text) return;
+
+  let body = text;
+  let submit = "";
+  if (body.endsWith("\r")) {
+    submit = "\r";
+    body = body.slice(0, -1);
+  }
+
   const sentEsc = exitSelectionMode(state, deps);
-  if (sentEsc) {
-    deps.schedule(() => sendTerminalInput(state, text), 50);
+  const bodyDelay = sentEsc ? POST_ESC_DELAY_MS : 0;
+
+  const sendBody = () => {
+    if (body) sendTerminalInput(state, body);
+  };
+
+  if (bodyDelay === 0) {
+    sendBody();
   } else {
-    sendTerminalInput(state, text);
+    deps.schedule(sendBody, bodyDelay);
+  }
+
+  if (submit) {
+    deps.schedule(
+      () => sendTerminalInput(state, submit),
+      bodyDelay + SUBMIT_GAP_MS,
+    );
   }
 }
 

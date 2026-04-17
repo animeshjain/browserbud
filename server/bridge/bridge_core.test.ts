@@ -256,6 +256,73 @@ describe("sendTextToTerminal", () => {
     sendTextToTerminal(state, deps, "");
     expect((state.ttydSocket as any).send).not.toHaveBeenCalled();
   });
+
+  it("sends body immediately and schedules trailing \\r as separate Enter", () => {
+    const scheduled: Array<{ fn: () => void; ms: number }> = [];
+    const deps = makeMockDeps({
+      schedule: vi.fn((fn, ms) => {
+        scheduled.push({ fn, ms });
+      }),
+    });
+
+    sendTextToTerminal(state, deps, "/clear\r");
+
+    // Body sent synchronously without the trailing \r
+    expect((state.ttydSocket as any).send).toHaveBeenCalledWith("0/clear");
+    expect((state.ttydSocket as any).send).not.toHaveBeenCalledWith("0\r");
+
+    // Enter scheduled separately with the submit gap
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0].ms).toBe(80);
+
+    scheduled[0].fn();
+    expect((state.ttydSocket as any).send).toHaveBeenCalledWith("0\r");
+  });
+
+  it("handles ESC + body + \\r: schedules body after ESC delay and \\r after that", () => {
+    state.copyModeActive = true;
+    const scheduled: Array<{ fn: () => void; ms: number }> = [];
+    const deps = makeMockDeps({
+      schedule: vi.fn((fn, ms) => {
+        scheduled.push({ fn, ms });
+      }),
+    });
+
+    sendTextToTerminal(state, deps, "hello\r");
+
+    // ESC sent synchronously, body/submit both deferred
+    expect((state.ttydSocket as any).send).toHaveBeenCalledWith("0\u001b");
+    expect((state.ttydSocket as any).send).not.toHaveBeenCalledWith("0hello");
+    expect((state.ttydSocket as any).send).not.toHaveBeenCalledWith("0\r");
+
+    expect(scheduled).toHaveLength(2);
+    expect(scheduled[0].ms).toBe(50); // body after ESC
+    expect(scheduled[1].ms).toBe(130); // submit after body gap
+
+    scheduled[0].fn();
+    expect((state.ttydSocket as any).send).toHaveBeenCalledWith("0hello");
+    scheduled[1].fn();
+    expect((state.ttydSocket as any).send).toHaveBeenCalledWith("0\r");
+  });
+
+  it("schedules bare \\r as the submit keypress with no body send", () => {
+    const scheduled: Array<{ fn: () => void; ms: number }> = [];
+    const deps = makeMockDeps({
+      schedule: vi.fn((fn, ms) => {
+        scheduled.push({ fn, ms });
+      }),
+    });
+
+    sendTextToTerminal(state, deps, "\r");
+
+    // No synchronous send — body is empty
+    expect((state.ttydSocket as any).send).not.toHaveBeenCalled();
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0].ms).toBe(80);
+
+    scheduled[0].fn();
+    expect((state.ttydSocket as any).send).toHaveBeenCalledWith("0\r");
+  });
 });
 
 // ─── copySelectionToClipboard (fallback ordering) ───────────────────────────
