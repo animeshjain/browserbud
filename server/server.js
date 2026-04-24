@@ -30,6 +30,9 @@ const startTime = Date.now();
 const TTYD_PORT = parseInt(process.env.BROWSERBUD_TTYD_PORT, 10);
 const PROXY_PORT = parseInt(process.env.BROWSERBUD_PORT, 10);
 const DATA_DIR = process.env.BROWSERBUD_DATA_DIR || path.join(os.homedir(), "browse");
+const TMUX_SOCKET = process.env.BROWSERBUD_TMUX_SOCKET || "browserbud";
+const TMUX_SESSION = process.env.BROWSERBUD_TMUX_SESSION || "browserbud";
+const TMUX_SESSION_SCRIPT = path.join(__dirname, "tmux-session.sh");
 const CONTEXT_DIR = path.join(DATA_DIR, "context");
 const CONTEXT_FILE = path.join(CONTEXT_DIR, "current.json");
 const CACHE_DIR = path.join(DATA_DIR, "cache", "youtube");
@@ -211,6 +214,113 @@ function restoreHiddenLockFiles() {
   }
 }
 
+// Hide sibling IDE lock files so `claude --ide` auto-connects to BrowserBud
+// rather than some other IDE's MCP server (VS Code, JetBrains, etc.).
+// They're restored by restoreHiddenLockFiles() when Claude Code connects.
+function hideOtherLockFiles() {
+  if (!mcpPort) return;
+  const ours = `${mcpPort}.lock`;
+  try {
+    const files = fs.readdirSync(IDE_DIR);
+    for (const f of files) {
+      if (!f.endsWith(".lock") || f === ours) continue;
+      try {
+        fs.renameSync(path.join(IDE_DIR, f), path.join(IDE_DIR, `${f}.browserbud-hidden`));
+        log.debug({ file: f }, "hid foreign lock file");
+      } catch (err) {
+        log.debug({ file: f, err: err.message }, "could not hide lock file");
+      }
+    }
+  } catch (err) {
+    log.debug({ err: err.message }, "no IDE dir to scan for lock files");
+  }
+}
+
+// ─── Terminal session supervision ──────────────────────────────────────────
+// The tmux session is a single pane running `claude --ide`. When claude exits
+// (crash, auth expiry, idle kill), the pane dies and tmux destroys the session,
+// leaving ttyd unable to attach. We (re)create the session on startup and on
+// every ttyd /ws upgrade so the side panel always has something to attach to.
+
+let sessionSpawnInFlight = false;
+let lastSessionSpawnAt = 0;
+const SESSION_SPAWN_COOLDOWN_MS = 5000;
+
+function tmuxSessionExists() {
+  try {
+    execSync(`tmux -L ${TMUX_SOCKET} has-session -t ${TMUX_SESSION} 2>/dev/null`, {
+      timeout: 2000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function spawnTerminalSession() {
+  const { spawn } = require("child_process");
+  return new Promise((resolve) => {
+    const child = spawn("bash", [TMUX_SESSION_SCRIPT, DATA_DIR], {
+      env: { ...process.env, BROWSERBUD_TMUX_SOCKET: TMUX_SOCKET, BROWSERBUD_TMUX_SESSION: TMUX_SESSION },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const chunks = [];
+    child.stdout.on("data", (d) => chunks.push(d));
+    child.stderr.on("data", (d) => chunks.push(d));
+    child.on("close", (code) => {
+      const output = Buffer.concat(chunks).toString().trim();
+      if (code === 0) {
+        log.info({ output: output || undefined }, "tmux session created");
+      } else {
+        log.error({ code, output }, "tmux-session.sh failed");
+      }
+      resolve(code === 0);
+    });
+    child.on("error", (err) => {
+      log.error({ err: err.message }, "failed to spawn tmux-session.sh");
+      resolve(false);
+    });
+  });
+}
+
+// Returns a promise that resolves when the session is (re)created or it was
+// already healthy. Startup awaits it so start.sh only launches ttyd once the
+// session exists. The /ws upgrade handler fires-and-forgets — ttyd's client
+// reconnect loop picks up the fresh session ≈1s later.
+function ensureTerminalSession(reason) {
+  // Escape hatch for tests: avoid touching the shared tmux socket.
+  if (process.env.BROWSERBUD_DISABLE_TERMINAL_SESSION === "1") return Promise.resolve(true);
+  if (tmuxSessionExists()) return Promise.resolve(true);
+  if (sessionSpawnInFlight) {
+    log.debug({ reason }, "session respawn already in flight");
+    return Promise.resolve(false);
+  }
+  const now = Date.now();
+  if (now - lastSessionSpawnAt < SESSION_SPAWN_COOLDOWN_MS) {
+    log.warn({ reason, sinceLastMs: now - lastSessionSpawnAt }, "session respawn throttled");
+    return Promise.resolve(false);
+  }
+  lastSessionSpawnAt = now;
+  sessionSpawnInFlight = true;
+  log.info({ reason }, "terminal session missing — respawning");
+  hideOtherLockFiles();
+  return spawnTerminalSession().finally(() => {
+    sessionSpawnInFlight = false;
+  });
+}
+
+function killTerminalSession() {
+  if (process.env.BROWSERBUD_DISABLE_TERMINAL_SESSION === "1") return;
+  try {
+    execSync(`tmux -L ${TMUX_SOCKET} kill-session -t ${TMUX_SESSION} 2>/dev/null`, {
+      timeout: 2000,
+    });
+    log.info("tmux session killed");
+  } catch {
+    // already gone
+  }
+}
+
 function startMcpServer() {
   fs.mkdirSync(IDE_DIR, { recursive: true });
 
@@ -264,10 +374,9 @@ function startMcpServer() {
   });
 
   // Listen on random port, localhost only
-  mcpServer.listen(0, "127.0.0.1", () => {
+  mcpServer.listen(0, "127.0.0.1", async () => {
     mcpPort = mcpServer.address().port;
     log.info({ port: mcpPort }, "mcp server listening");
-    fs.writeFileSync(path.join(IDE_DIR, "browserbud.port"), String(mcpPort));
 
     // Write a lock file so Claude Code discovers us (same format as VS Code / JetBrains plugins)
     const lockData = JSON.stringify({
@@ -281,6 +390,13 @@ function startMcpServer() {
     const lockPath = path.join(IDE_DIR, `${mcpPort}.lock`);
     fs.writeFileSync(lockPath, lockData);
     log.info({ lockPath }, "lock file written");
+
+    // (Re)create the tmux session that ttyd attaches to. We block on this so
+    // start.sh's "wait for browserbud.port" also means the session is live.
+    await ensureTerminalSession("startup");
+
+    // browserbud.port is the "all ready" signal for start.sh — write it LAST.
+    fs.writeFileSync(path.join(IDE_DIR, "browserbud.port"), String(mcpPort));
   });
 
   return mcpServer;
@@ -1036,8 +1152,6 @@ function handleFrame(req, res) {
   });
 }
 
-const TMUX_SOCKET = process.env.BROWSERBUD_TMUX_SOCKET || "browserbud";
-
 // Rejoin lines that were soft-wrapped by the application (Ink sends explicit \n
 // for word-wrapping, so tmux treats every break as a hard newline).  We detect
 // wraps by checking whether the *original* line filled most of the terminal width.
@@ -1273,6 +1387,9 @@ server.on("upgrade", (req, socket, head) => {
     });
   } else {
     log.info({ url: req.url }, "ttyd WebSocket upgrade");
+    // Fire-and-forget: if the tmux session is dead, respawn it. ttyd's attach
+    // will fail once, the client reconnects, and the next upgrade succeeds.
+    ensureTerminalSession("ttyd-upgrade");
     proxy.ws(req, socket, head);
   }
 });
@@ -1333,6 +1450,10 @@ function printBanner() {
 
 function cleanup() {
   removeLockFile();
+  killTerminalSession();
+  try {
+    fs.unlinkSync(path.join(IDE_DIR, "browserbud.port"));
+  } catch {}
   process.exit();
 }
 process.on("SIGTERM", cleanup);

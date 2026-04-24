@@ -27,6 +27,8 @@ beforeAll(async () => {
       BROWSERBUD_LOG_LEVEL: "warn",
       // Set a data dir that won't interfere with real data
       BROWSERBUD_DATA_DIR: "/tmp/browserbud-test-data",
+      // Don't touch the shared tmux socket from tests
+      BROWSERBUD_DISABLE_TERMINAL_SESSION: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
