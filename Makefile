@@ -13,4 +13,5 @@ podman:
 	podman-compose build
 
 podman-up:
+	@podman info >/dev/null 2>&1 || podman machine start
 	podman-compose up --force-recreate
