@@ -11,6 +11,30 @@ export default defineContentScript({
     let selectionDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     let titleDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
+    // ─── Orphan-safe messaging ────────────────────────────────────────────────
+    // After an extension reload, this content script is orphaned and any
+    // browser.runtime.* call throws "Extension context invalidated" — and in
+    // Chrome it throws *synchronously*, so .catch() alone won't help. Wrap every
+    // send in try/catch and latch `isOrphaned` so subsequent event handlers
+    // (selectionchange, mouseup, visibilitychange, title MutationObserver) no-op.
+    let isOrphaned = false;
+
+    function safeSendMessage(msg: any): Promise<any> {
+      if (isOrphaned) return Promise.resolve();
+      try {
+        return Promise.resolve(browser.runtime.sendMessage(msg)).catch((err: any) => {
+          if (String(err?.message).includes("Extension context invalidated")) {
+            isOrphaned = true;
+          }
+        });
+      } catch (err: any) {
+        if (String(err?.message).includes("Extension context invalidated")) {
+          isOrphaned = true;
+        }
+        return Promise.resolve();
+      }
+    }
+
     function getContext() {
       const url = window.location.href;
       const site = new URL(url).hostname.replace(/^www\./, "");
@@ -33,7 +57,7 @@ export default defineContentScript({
       const json = JSON.stringify(ctx);
       if (json === lastContextJson) return;
       lastContextJson = json;
-      browser.runtime.sendMessage({ type: "context", data: ctx });
+      safeSendMessage({ type: "context", data: ctx });
     }
 
     function getPageContent() {
@@ -62,11 +86,11 @@ export default defineContentScript({
     sendContext();
 
     // Announce capabilities
-    browser.runtime.sendMessage({
+    safeSendMessage({
       type: "contentScriptReady",
       capabilities: ["getContext", "getPageContent"],
       url: window.location.href,
-    }).catch(() => {}); // side panel may not be open yet
+    });
 
     // ─── Selection tracking ───────────────────────────────────────────────────
 
@@ -107,7 +131,7 @@ export default defineContentScript({
         // been sent to the server in between, so bypass the dedup check.
         const ctx = getContext();
         lastContextJson = JSON.stringify(ctx);
-        browser.runtime.sendMessage({ type: "context", data: ctx });
+        safeSendMessage({ type: "context", data: ctx });
       }
     });
 
